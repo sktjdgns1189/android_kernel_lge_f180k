@@ -1,0 +1,32 @@
+# This file will be installed as /init.{ro.hardware}.rc
+
+import /init.qcom.rc
+
+# to override init.qcom.rc and init.target.rc
+import /init.lge.usb.rc
+import /init.lge.log.rc
+import /init.gee_core.rc
+import /init.lge.power.rc
+
+on init
+# 120215 younghan.kim@lge.com Porting Immersion Vib[S]
+    # Set a path to TMP folder (RW accessible)
+	export VIBE_PIPE_PATH /dev/pipes
+	mkdir /dev/pipes 0771 shell shell
+# 120215 younghan.kim@lge.com Porting Immersion Vib[E]
+
+# 120215 younghan.kim@lge.com Porting Immersion Vib[S]
+# TouchSense Player Service
+#2014-01-13,seungkyu, add system group for cts fail
+service immvibed /system/bin/immvibed
+	class main
+	user system
+	group shell system
+	oneshot
+# 120215 younghan.kim@lge.com Porting Immersion Vib[E]
+
+# LGE_CHANGE_S, 20141104, soodong.kim@lge.com
+# inform boot_completed of hdmi driver
+on property:dev.bootcomplete=1
+    write /sys/devices/virtual/graphics/fb1/hdmi_boot_completed 1
+# LGE_CHANGE_E, 20141104, soodong.kim@lge.com

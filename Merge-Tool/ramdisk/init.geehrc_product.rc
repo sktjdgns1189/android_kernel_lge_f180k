@@ -1,0 +1,22 @@
+
+on init
+    # LGE_UPDATE_START
+    exec /sbin/setup_fs_static \
+      /dev/block/platform/msm_sdcc.1/by-name/ve \
+      no_reboot
+    # LGE_UPDATE_END
+
+on fs
+    # LGE_UPDATE_START
+    mkdir /ve 0755 radio radio
+    wait /dev/block/platform/msm_sdcc.1/by-name/ve
+    exec /system/bin/e2fsck -p /dev/block/platform/msm_sdcc.1/by-name/ve
+    mount ext4 /dev/block/platform/msm_sdcc.1/by-name/ve /ve nosuid nodev barrier=1 noatime noauto_da_alloc errors=continue
+    # LGE_UPDATE_END
+
+on post-fs-data
+    # LGE_UPDATE_START
+    chown radio radio /ve
+    chmod 0755 /ve
+    symlink /ve /data/ve
+    # LGE_UPDATE_END

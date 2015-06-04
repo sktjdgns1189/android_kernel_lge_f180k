@@ -1,0 +1,258 @@
+# This file is imported by init.{ro.hardware}.rc
+
+# to override this file (device specific .rc)
+import /init.${ro.hardware}_core.rc
+import /init.gee.bt_vendor.rc
+import /init.lge.svelte.rc
+
+on init
+    # LGE_CHANGE_START, 2014/11/06, Fusion3-LOS-BSP-Filesys@lge.com
+    # Set permissions for persist partition
+    mkdir /persist 0771 system system
+    # See storage config details at http://source.android.com/tech/storage/
+	mkdir /mnt/shell/emulated 0700 shell shell
+    mkdir /storage 0751 system sdcard_r
+	mkdir /storage/emulated 0555 root root
+	mkdir /storage/emulated/legacy 0555 root root
+	mkdir /mnt/media_rw/external_SD 0700 media_rw media_rw
+	mkdir /storage/external_SD 0700 root root
+
+	export EXTERNAL_STORAGE /storage/emulated/legacy
+	export EXTERNAL_ADD_STORAGE /storage/external_SD
+	export SECONDARY_STORAGE /storage/external_SD
+	export EMULATED_STORAGE_SOURCE /mnt/shell/emulated
+	export EMULATED_STORAGE_TARGET /storage/emulated
+
+# For USB-OTG
+	mkdir /mnt/media_rw/USBstorage1 0700 media_rw media_rw
+	mkdir /mnt/media_rw/USBstorage2 0700 media_rw media_rw
+	mkdir /mnt/media_rw/USBstorage3 0700 media_rw media_rw
+	mkdir /mnt/media_rw/USBstorage4 0700 media_rw media_rw
+	mkdir /mnt/media_rw/USBstorage5 0700 media_rw media_rw
+	mkdir /mnt/media_rw/USBstorage6 0700 media_rw media_rw
+
+	export EXTERNAL_ADD_USB_STORAGE1 /storage/USBstorage1
+	export EXTERNAL_ADD_USB_STORAGE2 /storage/USBstorage2
+	export EXTERNAL_ADD_USB_STORAGE3 /storage/USBstorage3
+	export EXTERNAL_ADD_USB_STORAGE4 /storage/USBstorage4
+	export EXTERNAL_ADD_USB_STORAGE5 /storage/USBstorage5
+	export EXTERNAL_ADD_USB_STORAGE6 /storage/USBstorage6
+
+	mkdir /storage/USBstorage1 0700 root root
+	mkdir /storage/USBstorage2 0700 root root
+	mkdir /storage/USBstorage3 0700 root root
+	mkdir /storage/USBstorage4 0700 root root
+	mkdir /storage/USBstorage5 0700 root root
+	mkdir /storage/USBstorage6 0700 root root
+
+    # Support legacy paths
+	symlink /storage/emulated/legacy /sdcard
+	symlink /storage/emulated/legacy /mnt/sdcard
+	symlink /storage/emulated/legacy /storage/sdcard0
+    # LGE_CHANGE_END
+
+    # Mount pstore file system on /mnt/pstore
+    mkdir /mnt/pstore 660 system system
+    mount pstore /mnt/pstore /mnt/pstore
+
+	exec /sbin/setup_fs_static \
+        /dev/block/platform/msm_sdcc.1/by-name/userdata \
+        /dev/block/platform/msm_sdcc.1/by-name/cache \
+        /dev/block/platform/msm_sdcc.1/by-name/drm \
+        /dev/block/platform/msm_sdcc.1/by-name/sns \
+        /dev/block/platform/msm_sdcc.1/by-name/mpt \
+        no_reboot
+
+    # sd encryption
+    setprop ro.ssbd.session /dev/block/platform/msm_sdcc.1/by-name/eksst
+    setprop ro.ssbd.offset 0
+
+on fs
+    exec /system/bin/tune2fs -u system -r 10240 /dev/block/bootdevice/by-name/userdata
+
+    mkdir /sns 0755 system system
+    mkdir /persist-lg 0755 system system
+    mkdir /mpt 0755 system system
+
+    wait /dev/block/bootdevice/by-name/sns
+    exec /system/bin/e2fsck -p /dev/block/bootdevice/by-name/sns
+    mount ext4 /dev/block/bootdevice/by-name/sns /sns nosuid nodev barrier=1 noatime noauto_da_alloc errors=continue
+
+    wait /dev/block/bootdevice/by-name/drm
+    exec /system/bin/e2fsck -p /dev/block/bootdevice/by-name/drm
+    mount ext4 /dev/block/bootdevice/by-name/drm /persist-lg nosuid nodev barrier=1 noatime noauto_da_alloc errors=continue
+
+    wait /dev/block/bootdevice/by-name/mpt
+    exec /system/bin/e2fsck -p /dev/block/bootdevice/by-name/mpt
+    mount ext4 /dev/block/bootdevice/by-name/mpt /mpt nodev nosuid barrier=1 noatime noauto_da_alloc errors=continue
+
+    restorecon_recursive /sns
+    restorecon_recursive /persist-lg
+    restorecon_recursive /mpt
+
+    restorecon_check_recursive /sns
+    restorecon_check_recursive /persist-lg
+    restorecon_check_recursive /mpt
+
+on post-fs
+    # execute sreadahead daemon to reduce boot-time
+    start sreadahead
+
+    # ramoops backup function start service
+    start ramoops_backup
+
+# execute sreadahead daemon to reduce boot-time
+service sreadahead /sbin/treadahead
+    oneshot
+    disabled
+    seclabel u:r:sreadahead:s0
+
+# make a diecision whether sreadahead would be performed or not
+service sreadahead-check /sbin/sreadahead_check
+    class main
+    user root
+    group root
+    oneshot
+    seclabel u:r:sreadahead-check:s0
+
+# ramoops backup function service
+service ramoops_backup /system/bin/sh /system/etc/ramoops_backup.sh
+    class main
+    disabled
+    oneshot
+
+# enable & disable crash handler, rtb & trace event through property
+service service-crash /system/bin/sh /init.gee.crash.sh
+	class main
+	disabled
+	oneshot
+
+on property:persist.service.crash.enable=1
+	restart service-crash
+
+on property:persist.service.crash.enable=0
+	restart service-crash
+
+on chargerlogo
+    start log-kernel
+    stop bootlogo
+    write /sys/class/android_usb/android0/enable 0
+    write /sys/class/android_usb/android0/idVendor 1004
+    write /sys/class/android_usb/android0/idProduct 6300
+    write /sys/class/android_usb/android0/bDeviceClass 0
+    write /sys/class/android_usb/android0/bDeviceSubClass 0
+    write /sys/class/android_usb/android0/bDeviceProtocol 0
+    write /sys/class/android_usb/android0/functions charge_only
+    write /sys/class/android_usb/android0/enable 1
+    exec /sbin/chargerlogo
+
+# write eventlog for boot animation end
+service write_event_log /system/bin/write_event_log 55000
+    user system
+    group system
+    disabled
+    oneshot
+
+on property:init.svc.bootanim=stopped
+    start write_event_log
+
+on boot
+# 2013-02-25 hyoseab.song@lge.com LGP_DATA_TCPIP_TCP_BUFSIZE_ON_LTE_UPLUS [START]
+# Re-define TCP buffer size for SKT WCDMA network. Overwrite init.rc property
+# ReadMin, ReadInitial, ReadMax, WriteMin, WriteInitial, WriteMax,
+   setprop net.tcp.buffersize.umts		4094,87380,1220608,4096,16384,1220608
+   setprop net.tcp.buffersize.hspa		4094,87380,1220608,4096,16384,1220608
+   setprop net.tcp.buffersize.hsupa	4094,87380,1220608,4096,16384,1220608
+   setprop net.tcp.buffersize.hsdpa	4094,87380,1220608,4096,16384,1220608
+   setprop net.tcp.buffersize.lte     524288,1048576,2560000,524288,1048576,2560000
+# 2013-02-25 hyoseab.song@lge.com LGP_DATA_TCPIP_TCP_BUFSIZE_ON_LTE_UPLUS [END]
+    insmod /system/lib/modules/texfat.ko
+
+service atd /system/bin/atd /dev/ttyGS0 /dev/hsic0
+    socket atd stream 0660 system inet
+    class main
+
+service mtsd /system/bin/mtsd
+    class late_start
+    oneshot
+    socket mtsd.port stream 660 system system
+
+# modem logging (LGODM)
+import /init.lge.modem_log.rc
+
+# TestMode Daemon for broadcom driver
+service diagd /system/bin/diagd
+    class late_start
+    user root
+    group radio system
+    disabled
+    oneshot
+    socket lsock_diagd stream 666
+
+on property:wifi_ftm.diagd_start=1
+    start diagd
+
+on property:wifi_ftm.diagd_start=0
+    stop diagd
+
+#LGE_CHANGE_S, restart qcamerasvr when restarting mediaserver and servicemanager, yousung.kang@lge.com
+on property:init.svc.media=restarting
+   restart qcamerasvr
+on property:init.svc.servicemanager=restarting
+   restart qcamerasvr
+#LGE_CHANGE_E, restart qcamerasvr when restarting mediaserver and servicemanager, yousung.kang@lge.com
+
+# LGE_CHANGE_START, 2014/11/06, Fusion3-LOS-BSP-Filesys@lge.com
+service sdcard /system/bin/sdcard -u 1023 -g 1023 -l /data/media /mnt/shell/emulated
+    class late_start
+
+service fuse_external_SD /system/bin/sdcard -u 1023 -g 1023 -w 1023 -d /mnt/media_rw/external_SD /storage/external_SD
+    class late_start
+    disabled
+
+# fuse for USBStorage
+service fuse_USBstorage1 /system/bin/sdcard -u 1023 -g 1023 -d /mnt/media_rw/USBstorage1 /storage/USBstorage1
+    class late_start
+    disabled
+
+service fuse_USBstorage2 /system/bin/sdcard -u 1023 -g 1023 -d /mnt/media_rw/USBstorage2 /storage/USBstorage2
+    class late_start
+    disabled
+
+service fuse_USBstorage3 /system/bin/sdcard -u 1023 -g 1023 -d /mnt/media_rw/USBstorage3 /storage/USBstorage3
+    class late_start
+    disabled
+
+service fuse_USBstorage4 /system/bin/sdcard -u 1023 -g 1023 -d /mnt/media_rw/USBstorage4 /storage/USBstorage4
+    class late_start
+    disabled
+
+service fuse_USBstorage5 /system/bin/sdcard -u 1023 -g 1023 -d /mnt/media_rw/USBstorage5 /storage/USBstorage5
+    class late_start
+    disabled
+
+service fuse_USBstorage6 /system/bin/sdcard -u 1023 -g 1023 -d /mnt/media_rw/USBstorage6 /storage/USBstorage6
+    class late_start
+    disabled
+
+on property:persist.sys.emmc_size=0
+    start set_emmc_size
+
+on property:persist.sys.emmc_size=8GB
+    setprop ro.device.memory.system 0
+    setprop ro.device.memory.internal 8
+
+on property:persist.sys.emmc_size=16GB
+    setprop ro.device.memory.system 0
+    setprop ro.device.memory.internal 16
+
+on property:persist.sys.emmc_size=32GB
+    setprop ro.device.memory.system 0
+    setprop ro.device.memory.internal 32
+
+service set_emmc_size /system/bin/sh /set_emmc_size.sh
+    class main
+    user root
+    group media_rw system sdcard_rw
+    disabled
+    oneshot
