@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2013, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2011-2012, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -225,6 +225,14 @@ int pm8xxx_aux_clk_control(enum pm8xxx_aux_clk_id clk_id,
  */
 int pm8xxx_hsed_bias_control(enum pm8xxx_hsed_bias bias, bool enable);
 
+#ifndef QCT_CLK_KICK_START
+void pm8921_turn_on_19p2mhz_clk_ext(void);
+#endif
+
+/*                                            */
+int pm8921_usb_pwr_enable(int enable);
+/*                                            */
+
 /**
  * pm8xxx_read_register - Read a PMIC register
  * @addr: PMIC register address
@@ -285,10 +293,6 @@ static inline int pm8xxx_aux_clk_control(enum pm8xxx_aux_clk_id clk_id,
 }
 static inline int pm8xxx_hsed_bias_control(enum pm8xxx_hsed_bias bias,
 							bool enable)
-{
-	return -ENODEV;
-}
-static inline int pm8xxx_read_register(u16 addr, u8 *value)
 {
 	return -ENODEV;
 }

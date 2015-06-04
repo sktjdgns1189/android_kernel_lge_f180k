@@ -43,9 +43,9 @@ void __init mpq8092_init_gpiomux(void)
 {
 	int rc;
 
-	rc = msm_gpiomux_init_dt();
+	rc = msm_gpiomux_init(NR_GPIO_IRQS);
 	if (rc) {
-		pr_err("%s failed %d\n", __func__, rc);
+		pr_err(KERN_ERR "mpq8092_init_gpiomux failed %d\n", rc);
 		return;
 	}
 

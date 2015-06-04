@@ -1,4 +1,4 @@
-/* Copyright (c) 2011-2013, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2011-2012, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -11,10 +11,14 @@
  */
 
 #include <linux/kernel.h>
+#include <linux/interrupt.h>
+#include <linux/reboot.h>
 #include <linux/workqueue.h>
 #include <linux/io.h>
 #include <linux/jiffies.h>
 #include <linux/sched.h>
+#include <linux/stringify.h>
+#include <linux/delay.h>
 #include <linux/module.h>
 #include <linux/miscdevice.h>
 #include <linux/fs.h>
@@ -22,12 +26,19 @@
 #include <linux/slab.h>
 #include <linux/poll.h>
 #include <linux/uaccess.h>
-#include <linux/elf.h>
-#include <linux/wait.h>
+#include <linux/mutex.h>
 
-#include <mach/ramdump.h>
+#include <asm-generic/poll.h>
+
+#include "ramdump.h"
 
 #define RAMDUMP_WAIT_MSECS	120000
+
+/*
+ * Head entry for linked list
+ */
+static LIST_HEAD(ramdump_list);
+static DEFINE_MUTEX(ramdump_mtx);
 
 struct ramdump_device {
 	char name[256];
@@ -42,8 +53,7 @@ struct ramdump_device {
 	wait_queue_head_t dump_wait_q;
 	int nsegments;
 	struct ramdump_segment *segments;
-	size_t elfcore_size;
-	char *elfcore_buf;
+	struct list_head list;
 };
 
 static int ramdump_open(struct inode *inode, struct file *filep)
@@ -104,32 +114,14 @@ static int ramdump_read(struct file *filep, char __user *buf, size_t count,
 	unsigned long addr = 0;
 	size_t copy_size = 0;
 	int ret = 0;
-	loff_t orig_pos = *pos;
 
-	if ((filep->f_flags & O_NONBLOCK) && !rd_dev->data_ready)
-		return -EAGAIN;
-
-	ret = wait_event_interruptible(rd_dev->dump_wait_q, rd_dev->data_ready);
-	if (ret)
-		return ret;
-
-	if (*pos < rd_dev->elfcore_size) {
-		copy_size = rd_dev->elfcore_size - *pos;
-		copy_size = min(copy_size, count);
-
-		if (copy_to_user(buf, rd_dev->elfcore_buf + *pos, copy_size)) {
-			ret = -EFAULT;
-			goto ramdump_done;
-		}
-		*pos += copy_size;
-		count -= copy_size;
-		buf += copy_size;
-		if (count == 0)
-			return copy_size;
+	if (rd_dev->data_ready == 0) {
+		pr_err("Ramdump(%s): Read when there's no dump available!",
+			rd_dev->name);
+		return -EPIPE;
 	}
 
-	addr = offset_translate(*pos - rd_dev->elfcore_size, rd_dev,
-				&data_left);
+	addr = offset_translate(*pos, rd_dev, &data_left);
 
 	/* EOF check */
 	if (data_left == 0) {
@@ -167,7 +159,7 @@ static int ramdump_read(struct file *filep, char __user *buf, size_t count,
 	pr_debug("Ramdump(%s): Read %d bytes from address %lx.",
 			rd_dev->name, copy_size, addr);
 
-	return *pos - orig_pos;
+	return copy_size;
 
 ramdump_done:
 	rd_dev->data_ready = 0;
@@ -190,22 +182,35 @@ static unsigned int ramdump_poll(struct file *filep,
 	return mask;
 }
 
-static const struct file_operations ramdump_file_ops = {
+const struct file_operations ramdump_file_ops = {
 	.open = ramdump_open,
 	.release = ramdump_release,
 	.read = ramdump_read,
 	.poll = ramdump_poll
 };
 
-void *create_ramdump_device(const char *dev_name, struct device *parent)
+void *create_ramdump_device(const char *dev_name)
 {
 	int ret;
 	struct ramdump_device *rd_dev;
+	char name[256];
 
 	if (!dev_name) {
 		pr_err("%s: Invalid device name.\n", __func__);
 		return NULL;
 	}
+
+	snprintf(name, ARRAY_SIZE(name), "ramdump_%s", dev_name);
+	mutex_lock(&ramdump_mtx);
+	list_for_each_entry(rd_dev, &ramdump_list, list) {
+		if (!strcmp(rd_dev->device.name, name)) {
+			mutex_unlock(&ramdump_mtx);
+			pr_warning("%s: already exist: %s",
+					__func__, name);
+			return (void *)rd_dev;
+		}
+	}
+	mutex_unlock(&ramdump_mtx);
 
 	rd_dev = kzalloc(sizeof(struct ramdump_device), GFP_KERNEL);
 
@@ -214,6 +219,7 @@ void *create_ramdump_device(const char *dev_name, struct device *parent)
 			__func__);
 		return NULL;
 	}
+	INIT_LIST_HEAD(&rd_dev->list);
 
 	snprintf(rd_dev->name, ARRAY_SIZE(rd_dev->name), "ramdump_%s",
 		 dev_name);
@@ -223,7 +229,6 @@ void *create_ramdump_device(const char *dev_name, struct device *parent)
 	rd_dev->device.minor = MISC_DYNAMIC_MINOR;
 	rd_dev->device.name = rd_dev->name;
 	rd_dev->device.fops = &ramdump_file_ops;
-	rd_dev->device.parent = parent;
 
 	init_waitqueue_head(&rd_dev->dump_wait_q);
 
@@ -235,6 +240,10 @@ void *create_ramdump_device(const char *dev_name, struct device *parent)
 		kfree(rd_dev);
 		return NULL;
 	}
+
+	mutex_lock(&ramdump_mtx);
+	list_add(&rd_dev->list, &ramdump_list);
+	mutex_unlock(&ramdump_mtx);
 
 	return (void *)rd_dev;
 }
@@ -250,14 +259,11 @@ void destroy_ramdump_device(void *dev)
 	kfree(rd_dev);
 }
 
-static int _do_ramdump(void *handle, struct ramdump_segment *segments,
-		int nsegments, bool use_elf)
+int do_ramdump(void *handle, struct ramdump_segment *segments,
+		int nsegments)
 {
 	int ret, i;
 	struct ramdump_device *rd_dev = (struct ramdump_device *)handle;
-	Elf32_Phdr *phdr;
-	Elf32_Ehdr *ehdr;
-	unsigned long offset;
 
 	if (!rd_dev->consumer_present) {
 		pr_err("Ramdump(%s): No consumers. Aborting..\n", rd_dev->name);
@@ -269,38 +275,6 @@ static int _do_ramdump(void *handle, struct ramdump_segment *segments,
 
 	rd_dev->segments = segments;
 	rd_dev->nsegments = nsegments;
-
-	if (use_elf) {
-		rd_dev->elfcore_size = sizeof(*ehdr) +
-				       sizeof(*phdr) * nsegments;
-		ehdr = kzalloc(rd_dev->elfcore_size, GFP_KERNEL);
-		rd_dev->elfcore_buf = (char *)ehdr;
-		if (!rd_dev->elfcore_buf)
-			return -ENOMEM;
-
-		memcpy(ehdr->e_ident, ELFMAG, SELFMAG);
-		ehdr->e_ident[EI_CLASS] = ELFCLASS32;
-		ehdr->e_ident[EI_DATA] = ELFDATA2LSB;
-		ehdr->e_ident[EI_VERSION] = EV_CURRENT;
-		ehdr->e_ident[EI_OSABI] = ELFOSABI_NONE;
-		ehdr->e_type = ET_CORE;
-		ehdr->e_version = EV_CURRENT;
-		ehdr->e_phoff = sizeof(*ehdr);
-		ehdr->e_ehsize = sizeof(*ehdr);
-		ehdr->e_phentsize = sizeof(*phdr);
-		ehdr->e_phnum = nsegments;
-
-		offset = rd_dev->elfcore_size;
-		phdr = (Elf32_Phdr *)(ehdr + 1);
-		for (i = 0; i < nsegments; i++, phdr++) {
-			phdr->p_type = PT_LOAD;
-			phdr->p_offset = offset;
-			phdr->p_vaddr = phdr->p_paddr = segments[i].address;
-			phdr->p_filesz = phdr->p_memsz = segments[i].size;
-			phdr->p_flags = PF_R | PF_W | PF_X;
-			offset += phdr->p_filesz;
-		}
-	}
 
 	rd_dev->data_ready = 1;
 	rd_dev->ramdump_status = -1;
@@ -322,20 +296,5 @@ static int _do_ramdump(void *handle, struct ramdump_segment *segments,
 		ret = (rd_dev->ramdump_status == 0) ? 0 : -EPIPE;
 
 	rd_dev->data_ready = 0;
-	rd_dev->elfcore_size = 0;
-	kfree(rd_dev->elfcore_buf);
-	rd_dev->elfcore_buf = NULL;
 	return ret;
-
-}
-
-int do_ramdump(void *handle, struct ramdump_segment *segments, int nsegments)
-{
-	return _do_ramdump(handle, segments, nsegments, false);
-}
-
-int
-do_elf_ramdump(void *handle, struct ramdump_segment *segments, int nsegments)
-{
-	return _do_ramdump(handle, segments, nsegments, true);
 }

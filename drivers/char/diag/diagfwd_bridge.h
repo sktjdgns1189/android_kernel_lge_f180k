@@ -20,8 +20,15 @@
 #define HSIC_2	1
 #define SMUX	4
 
+//                                                                             
+#if defined(CONFIG_LGE_DM_DEV) || defined(CONFIG_LGE_DM_APP)
+#define HSIC_3  2
+#define HSIC_4  3
+#endif /*                   */
+//                                                                           
+
 int diagfwd_connect_bridge(int);
-void connect_bridge(int, uint8_t);
+void connect_bridge(int, int);
 int diagfwd_disconnect_bridge(int);
 void diagfwd_bridge_init(int index);
 void diagfwd_bridge_exit(void);

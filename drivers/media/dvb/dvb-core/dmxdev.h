@@ -58,19 +58,18 @@ enum dmxdev_state {
 
 struct dmxdev_feed {
 	u16 pid;
-	struct dmx_indexing_params idx_params;
-	struct dmx_cipher_operations cipher_ops;
+	struct dmx_secure_mode sec_mode;
 	struct dmx_ts_feed *ts;
 	struct list_head next;
 };
 
 struct dmxdev_sec_feed {
+	struct dmx_secure_mode sec_mode;
 	struct dmx_section_feed *feed;
-	struct dmx_cipher_operations cipher_ops;
 };
 
-#define DMX_EVENT_QUEUE_SIZE	500 /* number of events */
 struct dmxdev_events_queue {
+#define DMX_EVENT_QUEUE_SIZE	500 /* number of events */
 	/*
 	 * indices used to manage events queue.
 	 * read_index advanced when relevent data is read
@@ -95,49 +94,7 @@ struct dmxdev_events_queue {
 	u32 current_event_data_size;
 	u32 current_event_start_offset;
 
-	/* current setting of the events masking */
-	struct dmx_events_mask event_mask;
-
-	/*
-	 * indicates if an event used for data-reading from demux
-	 * filter is enabled or not. These are events on which
-	 * user may wait for before calling read() on the demux filter.
-	 */
-	int data_read_event_masked;
-
-	/*
-	 * holds the current number of pending events in the
-	 * events queue that are considered as a wake-up source
-	 */
-	u32 wakeup_events_counter;
-
 	struct dmx_filter_event queue[DMX_EVENT_QUEUE_SIZE];
-};
-
-#define DMX_MIN_INSERTION_REPETITION_TIME	25 /* in msec */
-struct ts_insertion_buffer {
-	/* work scheduled for insertion of this buffer */
-	struct delayed_work dwork;
-
-	struct list_head next;
-
-	/* buffer holding TS packets for insertion */
-	char *buffer;
-
-	/* buffer size */
-	size_t size;
-
-	/* buffer ID from user */
-	u32 identifier;
-
-	/* repetition time for the buffer insertion */
-	u32 repetition_time;
-
-	/* the recording filter to which this buffer belongs */
-	struct dmxdev_filter *dmxdevfilter;
-
-	/* indication whether insertion should be aborted */
-	int abort;
 };
 
 struct dmxdev_filter {
@@ -171,18 +128,10 @@ struct dmxdev_filter {
 	enum dmx_tsp_format_t dmx_tsp_format;
 	u32 rec_chunk_size;
 
-	/* list of buffers used for insertion (struct ts_insertion_buffer) */
-	struct list_head insertion_buffers;
-
-	/* End-of-stream indication has been received */
-	int eos_state;
-
 	/* only for sections */
 	struct timer_list timer;
 	int todo;
 	u8 secheader[3];
-
-	struct dmx_secure_mode sec_mode;
 
 	/* Decoder buffer(s) related */
 	struct dmx_decoder_buffers decoder_buffers;
@@ -198,6 +147,9 @@ struct dmxdev {
 	int filternum;
 	int capabilities;
 #define DMXDEV_CAP_DUPLEX	0x01
+#define DMXDEV_CAP_PULL_MODE	0x02
+#define DMXDEV_CAP_INDEXING	0x04
+#define DMXDEV_CAP_EXTERNAL_BUFFS_ONLY	0x08
 
 	enum dmx_playback_mode_t playback_mode;
 	dmx_source_t source;
@@ -218,8 +170,6 @@ struct dmxdev {
 	struct dvb_ringbuffer dvr_input_buffer;
 	enum dmx_buffer_mode dvr_input_buffer_mode;
 	struct task_struct *dvr_input_thread;
-	/* DVR commands (data feed / OOB command) queue */
-	struct dvb_ringbuffer dvr_cmd_buffer;
 
 #define DVR_BUFFER_SIZE (10*188*1024)
 
@@ -227,21 +177,6 @@ struct dmxdev {
 	spinlock_t lock;
 	spinlock_t dvr_in_lock;
 };
-
-enum dvr_cmd {
-	DVR_DATA_FEED_CMD,
-	DVR_OOB_CMD
-};
-
-struct dvr_command {
-	enum dvr_cmd type;
-	union {
-		struct dmx_oob_command oobcmd;
-		size_t data_feed_count;
-	} cmd;
-};
-
-#define DVR_CMDS_BUFFER_SIZE (sizeof(struct dvr_command)*500)
 
 
 int dvb_dmxdev_init(struct dmxdev *dmxdev, struct dvb_adapter *);

@@ -49,14 +49,10 @@ static unsigned char c_byt_pair_index;
 static char utf_8_flag;
 static char rt_ert_flag;
 static char formatting_dir;
-static unsigned char sig_blend = CTRL_ON;
 static DEFINE_MUTEX(iris_fm);
 
 module_param(rds_buf, uint, 0);
 MODULE_PARM_DESC(rds_buf, "RDS buffer entries: *100*");
-
-module_param(sig_blend, byte, S_IWUSR | S_IRUGO);
-MODULE_PARM_DESC(sig_blend, "signal blending switch: 0:OFF 1:ON");
 
 static void radio_hci_cmd_task(unsigned long arg);
 static void radio_hci_rx_task(unsigned long arg);
@@ -1892,6 +1888,13 @@ static void hci_cc_fm_enable_rsp(struct radio_hci_dev *hdev,
 		return;
 	}
 
+	if (radio->mode == FM_RECV_TURNING_ON) {
+		radio->mode = FM_RECV;
+		iris_q_event(radio, IRIS_EVT_RADIO_READY);
+	} else if(radio->mode == FM_TRANS_TURNING_ON) {
+		radio->mode = FM_TRANS;
+		iris_q_event(radio, IRIS_EVT_RADIO_READY);
+	}
 	radio_hci_req_complete(hdev, rsp->status);
 }
 
@@ -1938,7 +1941,6 @@ static void hci_cc_sig_threshold_rsp(struct radio_hci_dev *hdev,
 	if (!rsp->status)
 		memcpy(&radio->sig_th, rsp,
 			sizeof(struct hci_fm_sig_threshold_rsp));
-
 	radio_hci_req_complete(hdev, rsp->status);
 }
 
@@ -3770,19 +3772,7 @@ static int iris_vidioc_s_ctrl(struct file *file, void *priv,
 				radio->mode = FM_OFF;
 				goto END;
 			} else {
-				retval = initialise_recv(radio);
-				if (retval < 0) {
-					FMDERR("Error while initialising"\
-						"radio %d\n", retval);
-					hci_cmd(HCI_FM_DISABLE_RECV_CMD,
-							radio->fm_hdev);
-					radio->mode = FM_OFF;
-					goto END;
-				}
-			}
-			if (radio->mode == FM_RECV_TURNING_ON) {
-				radio->mode = FM_RECV;
-				iris_q_event(radio, IRIS_EVT_RADIO_READY);
+				initialise_recv(radio);
 			}
 			break;
 		case FM_TRANS:
@@ -3799,19 +3789,7 @@ static int iris_vidioc_s_ctrl(struct file *file, void *priv,
 				radio->mode = FM_OFF;
 				goto END;
 			} else {
-				retval = initialise_trans(radio);
-				if (retval < 0) {
-					FMDERR("Error while initialising"\
-							"radio %d\n", retval);
-					hci_cmd(HCI_FM_DISABLE_TRANS_CMD,
-								radio->fm_hdev);
-					radio->mode = FM_OFF;
-					goto END;
-				}
-			}
-			if (radio->mode == FM_TRANS_TURNING_ON) {
-				radio->mode = FM_TRANS;
-				iris_q_event(radio, IRIS_EVT_RADIO_READY);
+				initialise_trans(radio);
 			}
 			break;
 		case FM_OFF:
@@ -5011,7 +4989,7 @@ static int initialise_recv(struct iris_device *radio)
 	}
 
 	radio->stereo_mode.stereo_mode = CTRL_OFF;
-	radio->stereo_mode.sig_blend = sig_blend;
+	radio->stereo_mode.sig_blend = CTRL_ON;
 	radio->stereo_mode.intf_blend = CTRL_ON;
 	radio->stereo_mode.most_switch = CTRL_ON;
 	retval = hci_set_fm_stereo_mode(&radio->stereo_mode,
@@ -5228,16 +5206,10 @@ static int __devexit iris_remove(struct platform_device *pdev)
 	return 0;
 }
 
-static const struct of_device_id iris_fm_match[] = {
-	{.compatible = "qcom,iris_fm"},
-	{}
-};
-
 static struct platform_driver iris_driver = {
 	.driver = {
 		.owner  = THIS_MODULE,
 		.name   = "iris_fm",
-		.of_match_table = iris_fm_match,
 	},
 	.remove = __devexit_p(iris_remove),
 };

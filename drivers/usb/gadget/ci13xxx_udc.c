@@ -70,12 +70,30 @@
 #include <mach/usb_trace.h>
 #include "ci13xxx_udc.h"
 
+#ifdef CONFIG_USB_G_LGE_ANDROID //build error fix 0820
+#include <mach/board_lge.h>
+#endif
+
+#ifdef CONFIG_USB_G_LGE_ANDROID_PFSC
+#include <mach/board_lge.h>
+
+#define PORTSC_PFSC BIT(24)
+#endif
+
+/* Turns on streaming. overrides CI13XXX_DISABLE_STREAMING */
+#if CONFIG_USB_G_LGE_ANDROID
+static unsigned int streaming = 1;
+#else
+static unsigned int streaming;
+#endif
+module_param(streaming, uint, S_IRUGO | S_IWUSR);
+
 /******************************************************************************
  * DEFINE
  *****************************************************************************/
 
 #define DMA_ADDR_INVALID	(~(dma_addr_t)0)
-#define USB_MAX_TIMEOUT		25 /* 25msec timeout */
+#define USB_MAX_TIMEOUT		100 /* 100msec timeout */
 #define EP_PRIME_CHECK_DELAY	(jiffies + msecs_to_jiffies(1000))
 #define MAX_PRIME_CHECK_RETRY	3 /*Wait for 3sec for EP prime failure */
 
@@ -334,6 +352,9 @@ static int hw_device_init(void __iomem *base)
  */
 static int hw_device_reset(struct ci13xxx *udc)
 {
+#ifdef CONFIG_USB_G_LGE_ANDROID_PFSC
+    enum lge_boot_mode_type boot_mode;
+#endif
 	int delay_count = 25; /* 250 usec */
 
 	/* should flush & stop before reset */
@@ -363,10 +384,7 @@ static int hw_device_reset(struct ci13xxx *udc)
 	 * 8 micro frames. If CPU can handle interrupts at faster rate, ITC
 	 * can be set to lesser value to gain performance.
 	 */
-	if (udc->udc_driver->nz_itc)
-		hw_cwrite(CAP_USBCMD, USBCMD_ITC_MASK,
-			USBCMD_ITC(udc->udc_driver->nz_itc));
-	else if (udc->udc_driver->flags & CI13XXX_ZERO_ITC)
+	if (udc->udc_driver->flags & CI13XXX_ZERO_ITC)
 		hw_cwrite(CAP_USBCMD, USBCMD_ITC_MASK, USBCMD_ITC(0));
 
 	if (hw_cread(CAP_USBMODE, USBMODE_CM) != USBMODE_CM_DEVICE) {
@@ -374,6 +392,22 @@ static int hw_device_reset(struct ci13xxx *udc)
 		pr_err("lpm = %i", hw_bank.lpm);
 		return -ENODEV;
 	}
+
+#ifdef CONFIG_USB_G_LGE_ANDROID_PFSC
+    /*                         
+      
+                                        
+                                  
+                                        
+                                  
+     */
+    boot_mode = lge_get_boot_mode();
+    if ((boot_mode == LGE_BOOT_MODE_FACTORY)  ||
+        (boot_mode == LGE_BOOT_MODE_PIFBOOT))
+    {
+        hw_cwrite(CAP_PORTSC, PORTSC_PFSC, PORTSC_PFSC);
+    }
+#endif
 
 	return 0;
 }
@@ -388,32 +422,15 @@ static int hw_device_reset(struct ci13xxx *udc)
 static int hw_device_state(u32 dma)
 {
 	struct ci13xxx *udc = _udc;
-	struct usb_gadget *gadget = &udc->gadget;
 
 	if (dma) {
-		if (gadget->streaming_enabled || !(udc->udc_driver->flags &
-				CI13XXX_DISABLE_STREAMING)) {
+		if (streaming || !(udc->udc_driver->flags &
+				CI13XXX_DISABLE_STREAMING))
 			hw_cwrite(CAP_USBMODE, USBMODE_SDIS, 0);
-			pr_debug("%s(): streaming mode is enabled. USBMODE:%x\n",
-				__func__, hw_cread(CAP_USBMODE, ~0));
-		} else {
+		else
 			hw_cwrite(CAP_USBMODE, USBMODE_SDIS, USBMODE_SDIS);
-			pr_debug("%s(): streaming mode is disabled. USBMODE:%x\n",
-				__func__, hw_cread(CAP_USBMODE, ~0));
-		}
+
 		hw_cwrite(CAP_ENDPTLISTADDR, ~0, dma);
-
-		if (udc->udc_driver->notify_event)
-			udc->udc_driver->notify_event(udc,
-				CI13XXX_CONTROLLER_CONNECT_EVENT);
-
-		/* Set BIT(31) to enable AHB2AHB Bypass functionality */
-		if (udc->udc_driver->flags & CI13XXX_ENABLE_AHB2AHB_BYPASS) {
-			hw_awrite(ABS_AHBMODE, AHB2AHB_BYPASS, AHB2AHB_BYPASS);
-			pr_debug("%s(): ByPass Mode is enabled. AHBMODE:%x\n",
-					__func__, hw_aread(ABS_AHBMODE, ~0));
-		}
-
 		/* interrupt, error, port change, reset, sleep/suspend */
 		hw_cwrite(CAP_USBINTR, ~0,
 			     USBi_UI|USBi_UEI|USBi_PCI|USBi_URI|USBi_SLI);
@@ -421,12 +438,6 @@ static int hw_device_state(u32 dma)
 	} else {
 		hw_cwrite(CAP_USBCMD, USBCMD_RS, 0);
 		hw_cwrite(CAP_USBINTR, ~0, 0);
-		/* Clear BIT(31) to disable AHB2AHB Bypass functionality */
-		if (udc->udc_driver->flags & CI13XXX_ENABLE_AHB2AHB_BYPASS) {
-			hw_awrite(ABS_AHBMODE, AHB2AHB_BYPASS, 0);
-			pr_debug("%s(): ByPass Mode is disabled. AHBMODE:%x\n",
-					__func__, hw_aread(ABS_AHBMODE, ~0));
-		}
 	}
 	return 0;
 }
@@ -1432,6 +1443,9 @@ static ssize_t show_registers(struct device *dev,
 		dev_err(dev, "[%s] EINVAL\n", __func__);
 		return 0;
 	}
+	dump = kmalloc(2048, GFP_KERNEL);
+	if (dump == NULL)
+		return -ENOMEM;
 
 	dump = kmalloc(sizeof(u32) * DUMP_ENTRIES, GFP_KERNEL);
 	if (!dump) {
@@ -1867,14 +1881,6 @@ static void ep_prime_timer_func(unsigned long data)
 
 
 	spin_lock_irqsave(mep->lock, flags);
-
-	if (_udc && (!_udc->vbus_active || _udc->suspended)) {
-		pr_debug("ep%d%s prime timer when vbus_active=%d,suspend=%d\n",
-			mep->num, mep->dir ? "IN" : "OUT",
-			_udc->vbus_active, _udc->suspended);
-		goto out;
-	}
-
 	if (!hw_cread(CAP_ENDPTPRIME, BIT(n)))
 		goto out;
 
@@ -2002,8 +2008,8 @@ static int _hardware_enqueue(struct ci13xxx_ep *mEp, struct ci13xxx_req *mReq)
 
 	mReq->ptr->page[0]  = mReq->req.dma;
 	for (i = 1; i < 5; i++)
-		mReq->ptr->page[i] = (mReq->req.dma + i * CI13XXX_PAGE_SIZE) &
-							~TD_RESERVED_MASK;
+		mReq->ptr->page[i] =
+			(mReq->req.dma + i * CI13XXX_PAGE_SIZE) & ~TD_RESERVED_MASK;
 	wmb();
 
 	/* Remote Wakeup */
@@ -2219,9 +2225,6 @@ __acquires(mEp->lock)
 	if (mEp == NULL)
 		return -EINVAL;
 
-	del_timer(&mEp->prime_timer);
-	mEp->prime_timer_count = 0;
-
 	hw_ep_flush(mEp->num, mEp->dir);
 
 	while (!list_empty(&mEp->qh.queue)) {
@@ -2345,19 +2348,15 @@ __acquires(udc->lock)
 
 	spin_unlock(udc->lock);
 
-	if (udc->suspended) {
-		if (udc->udc_driver->notify_event)
-			udc->udc_driver->notify_event(udc,
-			CI13XXX_CONTROLLER_RESUME_EVENT);
-		if (udc->transceiver)
-			usb_phy_set_suspend(udc->transceiver, 0);
-		udc->driver->resume(&udc->gadget);
-		udc->suspended = 0;
-	}
-
+#ifdef CONFIG_LGE_PM
 	/*stop charging upon reset */
 	if (udc->transceiver)
 		usb_phy_set_power(udc->transceiver, 100);
+#else
+	/*stop charging upon reset */
+	if (udc->transceiver)
+		usb_phy_set_power(udc->transceiver, 100);
+#endif
 
 	retval = _gadget_stop_activity(&udc->gadget);
 	if (retval)
@@ -2797,6 +2796,7 @@ __acquires(udc->lock)
 					udc->remote_wakeup = 1;
 					err = isr_setup_status_phase(udc);
 					break;
+#ifdef CONFIG_USB_OTG
 				case USB_DEVICE_B_HNP_ENABLE:
 					udc->gadget.b_hnp_enable = 1;
 					err = isr_setup_status_phase(udc);
@@ -2807,6 +2807,17 @@ __acquires(udc->lock)
 					break;
 				case USB_DEVICE_A_ALT_HNP_SUPPORT:
 					break;
+#else	// Not CONFIG_USB_OTG
+				case USB_DEVICE_B_HNP_ENABLE:
+					err = 0;
+					break;
+				case USB_DEVICE_A_HNP_SUPPORT:
+					err = 0;
+					break;
+				case USB_DEVICE_A_ALT_HNP_SUPPORT:
+					err = 0;
+					break;
+#endif	//CONFIG_USB_OTG
 				case USB_DEVICE_TEST_MODE:
 					tmode = le16_to_cpu(req.wIndex) >> 8;
 					switch (tmode) {
@@ -2819,6 +2830,7 @@ __acquires(udc->lock)
 						err = isr_setup_status_phase(
 								udc);
 						break;
+#ifdef CONFIG_USB_OTG
 					case TEST_OTG_SRP_REQD:
 						udc->gadget.otg_srp_reqd = 1;
 						err = isr_setup_status_phase(
@@ -2829,6 +2841,14 @@ __acquires(udc->lock)
 						err = isr_setup_status_phase(
 								udc);
 						break;
+#else
+					case TEST_OTG_SRP_REQD:
+						err = 0;
+						break;
+					case TEST_OTG_HNP_REQD:
+						err = 0;
+						break;
+#endif
 					default:
 						break;
 					}
@@ -2877,7 +2897,7 @@ static int ep_enable(struct usb_ep *ep,
 	unsigned long flags;
 	unsigned mult = 0;
 
-	trace("ep = %p, desc = %p", ep, desc);
+	trace("%p, %p", ep, desc);
 
 	if (ep == NULL || desc == NULL)
 		return -EINVAL;
@@ -2951,6 +2971,8 @@ static int ep_disable(struct usb_ep *ep)
 
 	/* only internal SW should disable ctrl endpts */
 
+	del_timer(&mEp->prime_timer);
+	mEp->prime_timer_count = 0;
 	direction = mEp->dir;
 	do {
 		dbg_event(_usb_addr(mEp), "DISABLE", 0);
@@ -2971,7 +2993,6 @@ static int ep_disable(struct usb_ep *ep)
 
 	mEp->desc = NULL;
 	mEp->ep.desc = NULL;
-	mEp->ep.maxpacket = USHRT_MAX;
 
 	spin_unlock_irqrestore(mEp->lock, flags);
 	return retval;
@@ -3305,6 +3326,8 @@ static void ep_fifo_flush(struct usb_ep *ep)
 
 	spin_lock_irqsave(mEp->lock, flags);
 
+	del_timer(&mEp->prime_timer);
+	mEp->prime_timer_count = 0;
 	dbg_event(_usb_addr(mEp), "FFLUSH", 0);
 	/*
 	 * _ep_nuke() takes care of flushing the endpoint.
@@ -3393,8 +3416,12 @@ static int ci13xxx_pullup(struct usb_gadget *_gadget, int is_active)
 	}
 	spin_unlock_irqrestore(udc->lock, flags);
 
-	if (is_active)
+	if (is_active) {
 		hw_device_state(udc->ep0out.qh.dma);
+		if (udc->udc_driver->notify_event)
+			udc->udc_driver->notify_event(udc,
+				CI13XXX_CONTROLLER_CONNECT_EVENT);
+	}
 	else
 		hw_device_state(0);
 
@@ -3404,7 +3431,6 @@ static int ci13xxx_pullup(struct usb_gadget *_gadget, int is_active)
 static int ci13xxx_start(struct usb_gadget_driver *driver,
 		int (*bind)(struct usb_gadget *));
 static int ci13xxx_stop(struct usb_gadget_driver *driver);
-
 /**
  * Device operations part of the API to the USB controller hardware,
  * which don't involve endpoints (or i/o)
@@ -3486,7 +3512,7 @@ static int ci13xxx_start(struct usb_gadget_driver *driver,
 			mEp->ep.name      = mEp->name;
 			mEp->ep.ops       = &usb_ep_ops;
 			mEp->ep.maxpacket =
-				k ? USHRT_MAX : CTRL_PAYLOAD_MAX;
+				k ? (unsigned short)~0 : CTRL_PAYLOAD_MAX;
 
 			INIT_LIST_HEAD(&mEp->qh.queue);
 			spin_unlock_irqrestore(udc->lock, flags);
@@ -3565,11 +3591,6 @@ static int ci13xxx_start(struct usb_gadget_driver *driver,
 	spin_unlock_irqrestore(udc->lock, flags);
 	if (retval || put)
 		pm_runtime_put_sync(&udc->gadget.dev);
-
-	if (udc->udc_driver->notify_event)
-			udc->udc_driver->notify_event(udc,
-				CI13XXX_CONTROLLER_UDC_STARTED_EVENT);
-
 	return retval;
 }
 
@@ -3827,7 +3848,9 @@ static int udc_probe(struct ci13xxx_udc_driver *driver, struct device *dev,
 	pm_runtime_no_callbacks(&udc->gadget.dev);
 	pm_runtime_enable(&udc->gadget.dev);
 
-	if (register_trace_usb_daytona_invalid_access(dump_usb_info, NULL))
+	retval = register_trace_usb_daytona_invalid_access(dump_usb_info,
+								NULL);
+	if (retval)
 		pr_err("Registering trace failed\n");
 
 	_udc = udc;

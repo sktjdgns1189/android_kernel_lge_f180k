@@ -1,3 +1,15 @@
+/* Copyright (c) 2011-2014, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ */
 #ifndef __MSM_ISP_H__
 #define __MSM_ISP_H__
 
@@ -58,7 +70,7 @@
 #define MSG_ID_RDI2_UPDATE_ACK          51
 #define MSG_ID_PIX0_UPDATE_ACK          52
 #define MSG_ID_PREV_STOP_ACK            53
-#define MSG_ID_STATS_BE                 54
+#define MSG_ID_OUTPUT_TERTIARY3         54
 
 
 /* ISP command IDs */
@@ -123,7 +135,6 @@
 #define VFE_CMD_EPOCH2_ACK                              58
 #define VFE_CMD_START_RECORDING                         59
 #define VFE_CMD_STOP_RECORDING                          60
-#define VFE_CMD_DUMMY_5                                 61
 #define VFE_CMD_DUMMY_6                                 62
 #define VFE_CMD_CAPTURE                                 63
 #define VFE_CMD_DUMMY_7                                 64
@@ -225,8 +236,13 @@
 #define VFE_CMD_COLORXFORM_ENC_UPDATE                   160
 #define VFE_CMD_COLORXFORM_VIEW_UPDATE                  161
 #define VFE_CMD_TEST_GEN_CFG                            162
-#define VFE_CMD_STATS_BE_START                          163
-#define VFE_CMD_STATS_BE_STOP                           164
+#define VFE_CMD_SELECT_RDI                              163
+#define VFE_CMD_SET_STATS_VER                           164
+#define VFE_CMD_RGB_ALL_CFG                             165
+#define VFE_CMD_RGB_ALL_UPDATE                          166
+#define VFE_CMD_STOP_RECORDING_DONE                     167
+#define VFE_CMD_MAX                                     168
+
 struct msm_isp_cmd {
 	int32_t  id;
 	uint16_t length;
@@ -334,6 +350,13 @@ struct msm_vpe_clock_rate {
 #define VFE_OUTPUTS_THUMB_AND_JPEG      BIT(10)
 #define VFE_OUTPUTS_RDI0                BIT(11)
 #define VFE_OUTPUTS_RDI1                BIT(12)
+#define VFE_OUTPUTS_RDI2                BIT(13)
+
+#define	VFE_RDI_COMPOSITE				(1 << 0)
+#define	VFE_RDI_NON_COMPOSITE			(1 << 1)
+
+#define VFE_STATS_TYPE_LEGACY		0
+#define VFE_STATS_TYPE_BAYER		(1 << 2)
 
 struct msm_frame_info {
 	uint32_t inst_handle;

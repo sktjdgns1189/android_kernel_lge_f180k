@@ -30,12 +30,13 @@
 #include "diag_masks.h"
 #include "diagfwd_bridge.h"
 
+#include "mtsk_tty.h"
 struct diag_bridge_dev *diag_bridge;
 
 /* diagfwd_connect_bridge is called when the USB mdm channel is connected */
 int diagfwd_connect_bridge(int process_cable)
 {
-	uint8_t i;
+	int i;
 
 	pr_debug("diag: in %s\n", __func__);
 
@@ -45,9 +46,27 @@ int diagfwd_connect_bridge(int process_cable)
 	return 0;
 }
 
-void connect_bridge(int process_cable, uint8_t index)
+void connect_bridge(int process_cable, int index)
 {
 	int err;
+
+//                                                                             
+#ifdef CONFIG_LGE_DM_DEV
+			if ((process_cable) && (driver->logging_mode == DM_DEV_MODE)) {
+				printk(KERN_DEBUG "diag: USB connected in DM_DEV_MODE\n");
+				diag_bridge[index].usb_connected = 1;
+			}
+#endif /*                 */
+//                                                                           
+
+
+#ifdef CONFIG_LGE_DM_APP
+	if ((process_cable) && (driver->logging_mode == DM_APP_MODE)) {
+		printk(KERN_DEBUG "diag: USB connected in DM_APP_MODE\n");
+		diag_bridge[index].usb_connected = 1;
+	}
+#endif /*                 */
+
 
 	mutex_lock(&diag_bridge[index].bridge_mutex);
 	/* If the usb cable is being connected */
@@ -61,18 +80,10 @@ void connect_bridge(int process_cable, uint8_t index)
 		diag_bridge[index].usb_connected = 1;
 	}
 
-	if (index == SMUX) {
-		if (driver->diag_smux_enabled) {
-			driver->in_busy_smux = 0;
-			diagfwd_connect_smux();
-		}
+	if (index == SMUX && driver->diag_smux_enabled) {
+		driver->in_busy_smux = 0;
+		diagfwd_connect_smux();
 	} else {
-		if (index >= MAX_HSIC_CH) {
-			pr_err("diag: Invalid hsic channel index %d in %s\n",
-							index, __func__);
-			mutex_unlock(&diag_bridge[index].bridge_mutex);
-			return;
-		}
 		if (diag_hsic[index].hsic_device_enabled &&
 			(driver->logging_mode != MEMORY_DEVICE_MODE ||
 			diag_hsic[index].hsic_data_requested)) {
@@ -82,7 +93,7 @@ void connect_bridge(int process_cable, uint8_t index)
 			 * device is not open */
 			if (!diag_hsic[index].hsic_device_opened) {
 				hsic_diag_bridge_ops[index].ctxt =
-							(void *)(int)(index);
+							(void *)(index);
 				err = diag_bridge_open(index,
 						 &hsic_diag_bridge_ops[index]);
 				if (err) {
@@ -126,6 +137,35 @@ int diagfwd_disconnect_bridge(int process_cable)
 {
 	int i;
 	pr_debug("diag: In %s, process_cable: %d\n", __func__, process_cable);
+//                                                                             
+#ifdef CONFIG_LGE_DM_DEV
+		if (driver->logging_mode == DM_DEV_MODE) {
+			for (i = 0; i < MAX_BRIDGES; i++) {
+				mutex_lock(&diag_bridge[i].bridge_mutex);
+				if (diag_bridge[i].enabled) {
+					diag_bridge[i].usb_connected = 0;
+					}
+				mutex_unlock(&diag_bridge[i].bridge_mutex);
+				}
+			return 0;
+		}
+#endif /*                 */
+//                                                                           
+
+
+#ifdef CONFIG_LGE_DM_APP
+			if (driver->logging_mode == DM_APP_MODE) {
+				for (i = 0; i < MAX_BRIDGES; i++) {
+					mutex_lock(&diag_bridge[i].bridge_mutex);
+					if (diag_bridge[i].enabled) {
+						diag_bridge[i].usb_connected = 0;
+						}
+					mutex_unlock(&diag_bridge[i].bridge_mutex);
+					}
+				return 0;
+			}
+#endif /*                 */
+
 
 	for (i = 0; i < MAX_BRIDGES; i++) {
 		if (diag_bridge[i].enabled) {
@@ -133,6 +173,7 @@ int diagfwd_disconnect_bridge(int process_cable)
 			/* If the usb cable is being disconnected */
 			if (process_cable) {
 				diag_bridge[i].usb_connected = 0;
+				usb_diag_free_req(diag_bridge[i].ch);
 			}
 
 			if (i == SMUX) {
@@ -277,6 +318,15 @@ void diagfwd_bridge_init(int index)
 		strlcpy(name, "hsic_2", sizeof(name));
 	} else if (index == SMUX) {
 		strlcpy(name, "smux", sizeof(name));
+//                                                                             
+#if defined(CONFIG_LGE_DM_DEV) || defined(CONFIG_LGE_DM_APP)
+
+	} else if (index == HSIC_3) {
+		strlcpy(name, "hsic_3", sizeof(name));
+	} else if (index == HSIC_4) {
+		strlcpy(name, "hsic_4", sizeof(name));
+#endif /*                   */
+//                                                                           
 	} else {
 		pr_err("diag: incorrect bridge init, instance: %d\n", index);
 		return;
@@ -382,6 +432,8 @@ void diagfwd_bridge_exit(void)
 	for (i = 0; i < MAX_BRIDGES; i++) {
 		if (diag_bridge[i].enabled) {
 #ifdef CONFIG_DIAG_OVER_USB
+			if (diag_bridge[i].usb_connected)
+				usb_diag_free_req(diag_bridge[i].ch);
 			usb_diag_close(diag_bridge[i].ch);
 #endif
 			kfree(diag_bridge[i].usb_buf_out);
@@ -392,3 +444,9 @@ void diagfwd_bridge_exit(void)
 	}
 	kfree(driver->write_ptr_mdm);
 }
+int mtsk_tty_send_mask(struct diag_request *diag_read_ptr) {
+
+
+	return diagfwd_read_complete_bridge(diag_read_ptr);
+}
+

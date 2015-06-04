@@ -1,4 +1,4 @@
-/* Copyright (c) 2010-2013, Linux Foundation. All rights reserved.
+/* Copyright (c) 2010-2013, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -22,7 +22,7 @@ struct ddl_context *ddl_get_context(void)
 	return &ddl_context;
 }
 
-#if DDL_MSG_LOG
+#ifdef DDL_MSG_LOG
 s8 *ddl_get_state_string(enum ddl_client_state client_state)
 {
 	s8 *ptr;
@@ -265,7 +265,7 @@ u32 ddl_decoder_dpb_init(struct ddl_client_context *ddl)
 	luma_size = ddl_get_yuv_buf_size(decoder->frame_size.width,
 			decoder->frame_size.height, DDL_YUV_BUF_TYPE_TILE);
 	dpb = decoder->dp_buf.no_of_dec_pic_buf;
-	DDL_MSG_LOW("%s Decoder num DPB buffers = %u Luma Size = %u",
+	DDL_MSG_LOW("%s: Decoder num DPB buffers = %u Luma Size = %u",
 				 __func__, dpb, luma_size);
 	if (dpb > DDL_MAX_BUFFER_COUNT)
 		dpb = DDL_MAX_BUFFER_COUNT;
@@ -274,12 +274,12 @@ u32 ddl_decoder_dpb_init(struct ddl_client_context *ddl)
 			frame[i].vcd_frm.virtual) {
 			if (luma_size <= frame[i].vcd_frm.alloc_len) {
 				memset(frame[i].vcd_frm.virtual,
-					 0x10101010, luma_size);
+					0x10101010, luma_size);
 				memset(frame[i].vcd_frm.virtual + luma_size,
-					 0x80808080,
+					0x80808080,
 					frame[i].vcd_frm.alloc_len - luma_size);
 				if (frame[i].vcd_frm.ion_flag
-					== ION_FLAG_CACHED) {
+					 == ION_FLAG_CACHED) {
 					msm_ion_do_cache_op(
 					ddl_context->video_ion_client,
 					frame[i].vcd_frm.buff_ion_handle,
@@ -290,7 +290,9 @@ u32 ddl_decoder_dpb_init(struct ddl_client_context *ddl)
 					ION_IOC_CLEAN_INV_CACHES);
 				}
 			} else {
-				DDL_MSG_ERROR("luma size error");
+				DDL_MSG_ERROR("%s: err: luma_size (%u), "\
+					"alloc_len (%u)", __func__,
+					luma_size, frame[i].vcd_frm.alloc_len);
 				return VCD_ERR_FAIL;
 			}
 		}
@@ -298,8 +300,7 @@ u32 ddl_decoder_dpb_init(struct ddl_client_context *ddl)
 		luma[i] = DDL_OFFSET(ddl_context->dram_base_a.
 			align_physical_addr, frame[i].vcd_frm.physical);
 		chroma[i] = luma[i] + luma_size;
-		DDL_MSG_LOW("%s Decoder Luma address = %x Chroma address = %x",
-					__func__, luma[i], chroma[i]);
+		DDL_MSG_LOW("luma size error");
 	}
 	switch (decoder->codec.codec) {
 	case VCD_CODEC_MPEG1:
@@ -405,8 +406,6 @@ void ddl_release_client_internal_buffers(struct ddl_client_context *ddl)
 		ddl_free_enc_hw_buffers(ddl);
 		ddl_free_ltr_list(&encoder->ltr_control);
 	}
-	ddl_pmem_free(&ddl->shared_mem[0]);
-	ddl_pmem_free(&ddl->shared_mem[1]);
 }
 
 u32 ddl_codec_type_transact(struct ddl_client_context *ddl,
@@ -621,17 +620,23 @@ void ddl_calc_dec_hw_buffers_size(enum vcd_codec codec, u32 width,
 			(codec == VCD_CODEC_DIVX_6) ||
 			(codec == VCD_CODEC_XVID) ||
 			(codec == VCD_CODEC_H263)) {
+			u32 val = DDL_MAX(DDL_MAX_FRAME_WIDTH,
+				DDL_MAX_FRAME_HEIGHT);
+			sz_sub_anchor_mv = DDL_ALIGN(((val >> 4) * 128 * 2 * 8),
+				DDL_LINEAR_BUFFER_ALIGN_BYTES);
 			sz_nb_dcac = DDL_KILO_BYTE(16);
 			sz_upnb_mv = DDL_KILO_BYTE(68);
-			sz_sub_anchor_mv = DDL_KILO_BYTE(136);
 			sz_overlap_xform = DDL_KILO_BYTE(32);
 			if (codec != VCD_CODEC_H263)
 				sz_stx_parser = DDL_KILO_BYTE(68);
 		} else if ((codec == VCD_CODEC_VC1) ||
 			(codec == VCD_CODEC_VC1_RCV)) {
+			u32 val = DDL_MAX(DDL_MAX_FRAME_WIDTH,
+				DDL_MAX_FRAME_HEIGHT);
+			sz_sub_anchor_mv = DDL_ALIGN(((val >> 4) * 128 * 2 * 8),
+				DDL_LINEAR_BUFFER_ALIGN_BYTES);
 			sz_nb_dcac = DDL_KILO_BYTE(16);
 			sz_upnb_mv = DDL_KILO_BYTE(68);
-			sz_sub_anchor_mv = DDL_KILO_BYTE(136);
 			sz_overlap_xform = DDL_KILO_BYTE(32);
 			sz_bit_plane3 = DDL_KILO_BYTE(2);
 			sz_bit_plane2 = DDL_KILO_BYTE(2);
@@ -815,13 +820,13 @@ u32 ddl_calc_enc_hw_buffers_size(enum vcd_codec codec, u32 width,
 		height, DDL_YUV_BUF_TYPE_TILE);
 	sz_dpb_c = ddl_get_yuv_buf_size(width, height>>1,
 		DDL_YUV_BUF_TYPE_TILE);
-	if (input_format ==
-		VCD_BUFFER_FORMAT_NV12_16M2KA) {
+	if ((input_format == VCD_BUFFER_FORMAT_NV12_16M2KA) ||
+		(input_format == VCD_BUFFER_FORMAT_NV21_16M2KA)) {
 		sz_cur_y = ddl_get_yuv_buf_size(width, height,
 			DDL_YUV_BUF_TYPE_LINEAR);
 		sz_cur_c = ddl_get_yuv_buf_size(width, height>>1,
 			DDL_YUV_BUF_TYPE_LINEAR);
-	} else if (VCD_BUFFER_FORMAT_TILE_4x2 == input_format) {
+	} else if (input_format == VCD_BUFFER_FORMAT_TILE_4x2) {
 		sz_cur_y = sz_dpb_y;
 		sz_cur_c = sz_dpb_c;
 	} else
@@ -1057,6 +1062,23 @@ u32 ddl_check_reconfig(struct ddl_client_context *ddl)
 			decoder->progressive_only)
 				need_reconfig = false;
 	}
+	DDL_MSG_HIGH("%s(): need_reconfig = %u, cont_mode = %u\n"\
+	"Actual: WxH = %ux%u, SxSH = %ux%u, sz = %u, min = %u, act = %u\n"\
+	"Client: WxH = %ux%u, SxSH = %ux%u, sz = %u, min = %u, act = %u\n",
+	__func__, need_reconfig, decoder->cont_mode,
+	decoder->frame_size.width, decoder->frame_size.height,
+	decoder->frame_size.stride, decoder->frame_size.scan_lines,
+	decoder->actual_output_buf_req.sz,
+	decoder->actual_output_buf_req.min_count,
+	decoder->actual_output_buf_req.actual_count,
+	decoder->client_frame_size.width,
+	decoder->client_frame_size.height,
+	decoder->client_frame_size.stride,
+	decoder->client_frame_size.scan_lines,
+	decoder->client_output_buf_req.sz,
+	decoder->client_output_buf_req.min_count,
+	decoder->client_output_buf_req.actual_count);
+
 	return need_reconfig;
 }
 
@@ -1140,7 +1162,7 @@ void ddl_set_vidc_timeout(struct ddl_client_context *ddl)
 				vidc_time_out = temp;
 		}
 	}
-	DDL_MSG_LOW("%s Video core time out value = 0x%x",
+	DDL_MSG_HIGH("%s Video core time out value = 0x%x",
 		 __func__, vidc_time_out);
 	vidc_sm_set_video_core_timeout_value(
 		&ddl->shared_mem[ddl->command_channel], vidc_time_out);
@@ -1154,7 +1176,7 @@ void ddl_handle_ltr_in_framedone(struct ddl_client_context *ddl)
 	if (ltr_control->storing) {
 		ltr_control->ltr_list[ltr_control->storing_idx].ltr_id =
 			ltr_control->curr_ltr_id;
-		DDL_MSG_MED("Encoder output stores LTR ID %d into entry %d",
+		DDL_MSG_LOW("Encoder output stores LTR ID %d into entry %d",
 			ltr_control->curr_ltr_id, ltr_control->storing_idx);
 		ltr_control->meta_data_reqd = true;
 		ltr_control->storing = false;
@@ -1192,10 +1214,10 @@ s32 ddl_encoder_ltr_control(struct ddl_client_context *ddl)
 			encoder->i_period.p_frames) &&
 			(!ltr_ctrl->out_frame_cnt_before_next_idr));
 		if (finite_i_period || infinite_i_period) {
-			DDL_MSG_HIGH("%s: Intra period reached. "\
-			"finite_i_period (%u), infinite_i_period (%u)",
-			__func__, (u32)finite_i_period,
-			(u32)infinite_i_period);
+			DDL_MSG_LOW("%s: Intra period reached. "\
+				"finite_i_period (%u), infinite_i_period (%u)",
+				__func__, (u32)finite_i_period,
+				(u32)infinite_i_period);
 			intra_period_reached = true;
 		}
 		if (intra_period_reached ||
@@ -1216,12 +1238,12 @@ s32 ddl_encoder_ltr_control(struct ddl_client_context *ddl)
 		if (!(ltr_ctrl->out_frame_cnt_before_next_idr %
 			ltr_ctrl->ltr_period)) {
 			s32 idx;
-			DDL_MSG_HIGH("%s: reached LTR period "\
+			DDL_MSG_LOW("%s: reached LTR period "\
 				"out_frame_cnt_before_next_idr %d",
 				__func__, ltr_ctrl->\
 				out_frame_cnt_before_next_idr);
 			idx = ddl_find_oldest_ltr_not_in_use(
-					ltr_ctrl);
+				ltr_ctrl);
 			if (idx >= 0) {
 				ltr_ctrl->storing = true;
 				ltr_ctrl->storing_idx = idx;
@@ -1233,9 +1255,9 @@ s32 ddl_encoder_ltr_control(struct ddl_client_context *ddl)
 		}
 	}
 	if (encoder->intra_frame_insertion) {
-		DDL_MSG_HIGH("%s: I-frame insertion requested, "\
+		DDL_MSG_LOW("%s: I-frame insertion requested, "\
 			"delay LTR store for one frame", __func__);
-		ltr_ctrl->store_for_intraframe_insertion = true;
+			ltr_ctrl->store_for_intraframe_insertion = true;
 	}
 	if (ltr_ctrl->pending_chg_ltr_useframes) {
 		ltr_ctrl->out_frame_cnt_to_use_this_ltr =
@@ -1254,33 +1276,32 @@ s32 ddl_encoder_ltr_control(struct ddl_client_context *ddl)
 		ltr_ctrl->using = true;
 		ltr_ctrl->use_ltr_reqd = false;
 	} else {
-		DDL_MSG_HIGH("%s: use_ltr_reqd skipped", __func__);
+		DDL_MSG_LOW("%s: use_ltr_reqd skipped", __func__);
 	}
 
 	return vcd_status;
 }
 
-
 s32 ddl_allocate_ltr_list(struct ddl_ltr_encoding_type *ltr_control)
 {
 	s32 vcd_status = VCD_S_SUCCESS;
 
-	DDL_MSG_LOW("%s: lrr_cout = %u", __func__, ltr_control->ltr_count);
+	DDL_MSG_LOW("%s: ltr_cout = %u", __func__, ltr_control->ltr_count);
 	if (!ltr_control->ltr_list) {
 		if (ltr_control->ltr_count) {
 			ltr_control->ltr_list = (struct ddl_ltrlist *)
 				kmalloc(sizeof(struct ddl_ltrlist)*
-					ltr_control->ltr_count, GFP_KERNEL);
+				ltr_control->ltr_count, GFP_KERNEL);
 			if (!ltr_control->ltr_list) {
-				DDL_MSG_ERROR("ddl_allocate_ltr_list failed");
+				DDL_MSG_LOW("ddl_allocate_ltr_list failed");
 				vcd_status = VCD_ERR_ALLOC_FAIL;
 			}
 		} else {
-			DDL_MSG_ERROR("%s: failed, zero LTR count", __func__);
+			DDL_MSG_LOW("%s: failed, zero LTR count", __func__);
 			vcd_status = VCD_ERR_FAIL;
 		}
 	} else {
-		DDL_MSG_HIGH("WARN: ltr_list already allocated");
+		DDL_MSG_LOW("WARN: ltr_list already allocated");
 	}
 
 	return vcd_status;
@@ -1318,6 +1339,8 @@ s32 ddl_find_oldest_ltr_not_in_use(struct ddl_ltr_encoding_type *ltr_control)
 	s32 found_idx = -1;
 	u32 i;
 
+	DDL_MSG_LOW("%s:", __func__);
+
 	if (ltr_control->ltr_list) {
 		if (ltr_control->ltr_count == 1)
 			found_idx = 0;
@@ -1348,6 +1371,8 @@ s32 ddl_find_ltr_in_use(struct ddl_ltr_encoding_type *ltr_control)
 	s32 found_idx = -1;
 	u32 i;
 
+	DDL_MSG_LOW("%s:", __func__);
+
 	if (ltr_control->ltr_list) {
 		for (i = 0; i < ltr_control->ltr_count; i++) {
 			if (ltr_control->ltr_list[i].ltr_in_use == true)
@@ -1365,6 +1390,8 @@ s32 ddl_find_ltr_from_list(struct ddl_ltr_encoding_type *ltr_control,
 	s32 found_idx = -1;
 	u32 i;
 
+	DDL_MSG_LOW("%s:", __func__);
+
 	if (ltr_control->ltr_list) {
 		for (i = 0; i < ltr_control->ltr_count; i++) {
 			if (ltr_control->ltr_list[i].ltr_id == ltr_id) {
@@ -1373,10 +1400,10 @@ s32 ddl_find_ltr_from_list(struct ddl_ltr_encoding_type *ltr_control,
 			}
 		}
 	} else {
-		DDL_MSG_ERROR("%s: ltr_list is NULL", __func__);
+		DDL_MSG_LOW("%s: ltr_list is NULL", __func__);
 	}
 
-	DDL_MSG_LOW("%s: found_idx = %d", __func__, found_idx);
+	DDL_MSG_ERROR("%s: found_idx = %d", __func__, found_idx);
 	return found_idx;
 }
 
@@ -1388,7 +1415,7 @@ s32 ddl_use_ltr_from_list(struct ddl_ltr_encoding_type *ltr_control,
 
 	DDL_MSG_LOW("%s: ltr_idx = %u", __func__, ltr_idx);
 	if (ltr_idx > ltr_control->ltr_count) {
-		DDL_MSG_ERROR("%s: fail, idx %d larger than "\
+		DDL_MSG_LOW("%s: fail, idx %d larger than "\
 			"the list array count %d", __func__,
 			ltr_idx, ltr_control->ltr_count);
 		vcd_status = VCD_ERR_FAIL;
@@ -1410,16 +1437,16 @@ void ddl_encoder_use_ltr_fail_callback(struct ddl_client_context *ddl)
 	struct ddl_encoder_data *encoder = &(ddl->codec_data.encoder);
 	struct ddl_context *ddl_context = ddl->ddl_context;
 
-	DDL_MSG_ERROR("%s: LTR use failed, callback "\
+	DDL_MSG_LOW("%s: LTR use failed, callback "\
 		"requested with LTR ID %d", __func__,
 		encoder->ltr_control.failed_use_cmd.ltr_id);
 
 	ddl_context->ddl_callback(VCD_EVT_IND_INFO_LTRUSE_FAILED,
-			VCD_ERR_ILLEGAL_PARM,
-			&(encoder->ltr_control.failed_use_cmd),
-			sizeof(struct vcd_property_ltruse_type),
-			(u32 *)ddl,
-			ddl->client_data);
+		VCD_ERR_ILLEGAL_PARM,
+		&(encoder->ltr_control.failed_use_cmd),
+		sizeof(struct vcd_property_ltruse_type),
+		(u32 *)ddl,
+		ddl->client_data);
 }
 
 void ddl_print_ltr_list(struct ddl_ltr_encoding_type *ltr_control)
@@ -1427,7 +1454,7 @@ void ddl_print_ltr_list(struct ddl_ltr_encoding_type *ltr_control)
 	u32 i;
 
 	for (i = 0; i < ltr_control->ltr_count; i++) {
-		DDL_MSG_MED("%s: ltr_id: %d, ltr_in_use: %d",
+		DDL_MSG_LOW("%s: ltr_id: %d, ltr_in_use: %d",
 			__func__, ltr_control->ltr_list[i].ltr_id,
 			ltr_control->ltr_list[i].ltr_in_use);
 	}

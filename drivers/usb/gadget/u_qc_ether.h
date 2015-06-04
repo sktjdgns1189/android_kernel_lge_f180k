@@ -4,7 +4,7 @@
  * Copyright (C) 2003-2005,2008 David Brownell
  * Copyright (C) 2003-2004 Robert Schwebel, Benedikt Spranger
  * Copyright (C) 2008 Nokia Corporation
- * Copyright (c) 2012-2013, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2012, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2
@@ -49,7 +49,7 @@ struct qc_gether {
 	struct usb_function		func;
 
 	/* updated by gether_{connect,disconnect} */
-	struct eth_qc_dev		*ioport;
+	struct eth_qc_dev			*ioport;
 
 	/* endpoints handle full and/or high speeds */
 	struct usb_ep			*in_ep;
@@ -61,7 +61,10 @@ struct qc_gether {
 
 	/* hooks for added framing, as needed for RNDIS and EEM. */
 	u32				header_len;
-
+	/* NCM requires fixed size bundles */
+	bool				is_fixed;
+	u32				fixed_out_len;
+	u32				fixed_in_len;
 	struct sk_buff			*(*wrap)(struct qc_gether *port,
 						struct sk_buff *skb);
 	int				(*unwrap)(struct qc_gether *port,
@@ -75,25 +78,20 @@ struct qc_gether {
 
 /* netdev setup/teardown as directed by the gadget driver */
 int gether_qc_setup(struct usb_gadget *g, u8 ethaddr[ETH_ALEN]);
-void gether_qc_cleanup_name(const char *netname);
+void gether_qc_cleanup(void);
 /* variant of gether_setup that allows customizing network device name */
 int gether_qc_setup_name(struct usb_gadget *g, u8 ethaddr[ETH_ALEN],
 		const char *netname);
 
 /* connect/disconnect is handled by individual functions */
-struct net_device *gether_qc_connect_name(struct qc_gether *link,
-		const char *netname, bool netif_enable);
-void gether_qc_disconnect_name(struct qc_gether *link, const char *netname);
+struct net_device *gether_qc_connect(struct qc_gether *);
+void gether_qc_disconnect(struct qc_gether *);
 
 /* each configuration may bind one instance of an ethernet link */
-int ecm_qc_bind_config(struct usb_configuration *c, u8 ethaddr[ETH_ALEN],
-				char *xport_name);
+int ecm_qc_bind_config(struct usb_configuration *c, u8 ethaddr[ETH_ALEN]);
 
 int
 rndis_qc_bind_config_vendor(struct usb_configuration *c, u8 ethaddr[ETH_ALEN],
 					 u32 vendorID, const char *manufacturer,
 					 u8 maxPktPerXfer);
-
-void gether_qc_get_macs(u8 dev_mac[ETH_ALEN], u8 host_mac[ETH_ALEN]);
-
 #endif /* __U_QC_ETHER_H */

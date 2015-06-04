@@ -1,4 +1,4 @@
-/* Copyright (c) 2008-2013, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2008-2012, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -34,14 +34,14 @@
 #include <linux/wakelock.h>
 
 #include <mach/msm_smd.h>
-#include <mach/subsystem_restart.h>
+#include <mach/peripheral-loader.h>
 #include <mach/msm_ipc_logging.h>
 
 #include "smd_private.h"
 #ifdef CONFIG_ARCH_FSM9XXX
 #define NUM_SMD_PKT_PORTS 4
 #else
-#define NUM_SMD_PKT_PORTS 31
+#define NUM_SMD_PKT_PORTS 24
 #endif
 
 #define PDRIVER_NAME_MAX_SIZE 32
@@ -509,7 +509,7 @@ ssize_t smd_pkt_write(struct file *file,
 	do {
 		prepare_to_wait(&smd_pkt_devp->ch_write_wait_queue,
 				&write_wait, TASK_UNINTERRUPTIBLE);
-		if (!smd_write_segment_avail(smd_pkt_devp->ch) &&
+		if (!smd_write_avail(smd_pkt_devp->ch) &&
 		    !smd_pkt_devp->has_reset) {
 			smd_enable_read_intr(smd_pkt_devp->ch);
 			schedule();
@@ -631,7 +631,7 @@ static void check_and_wakeup_writer(struct smd_pkt_dev *smd_pkt_devp)
 		return;
 	}
 
-	sz = smd_write_segment_avail(smd_pkt_devp->ch);
+	sz = smd_write_avail(smd_pkt_devp->ch);
 	if (sz) {
 		D_WRITE("%s: %d bytes write space in smd_pkt_dev id:%d\n",
 			__func__, sz, smd_pkt_devp->i);
@@ -645,9 +645,8 @@ static void ch_notify(void *priv, unsigned event)
 	struct smd_pkt_dev *smd_pkt_devp = priv;
 
 	if (smd_pkt_devp->ch == 0) {
-		if (event != SMD_EVENT_CLOSE)
-			pr_err("%s on a closed smd_pkt_dev id:%d\n",
-					__func__, smd_pkt_devp->i);
+		pr_err("%s on a closed smd_pkt_dev id:%d\n",
+			__func__, smd_pkt_devp->i);
 		return;
 	}
 
@@ -711,9 +710,6 @@ static char *smd_pkt_dev_name[] = {
 	"smdcntl5",
 	"smdcntl6",
 	"smdcntl7",
-	"smdcntl9",
-	"smdcntl10",
-	"smdcntl11",
 	"smd22",
 	"smdcnt_rev0",
 	"smdcnt_rev1",
@@ -729,10 +725,6 @@ static char *smd_pkt_dev_name[] = {
 	"smdcntl8",
 	"smd_sns_adsp",
 	"smd_cxm_qmi",
-	"smd_test_framework",
-	"smd_logging_0",
-	"smd_data_0",
-	"apr",
 	"smd_pkt_loopback",
 };
 
@@ -745,9 +737,6 @@ static char *smd_ch_name[] = {
 	"DATA12_CNTL",
 	"DATA13_CNTL",
 	"DATA14_CNTL",
-	"DATA15_CNTL",
-	"DATA16_CNTL",
-	"DATA17_CNTL",
 	"DATA22",
 	"DATA23_CNTL",
 	"DATA24_CNTL",
@@ -763,17 +752,10 @@ static char *smd_ch_name[] = {
 	"DATA40_CNTL",
 	"SENSOR",
 	"CXM_QMI_PORT_8064",
-	"TESTFRAMEWORK",
-	"LOGGING",
-	"DATA",
-	"apr",
 	"LOOPBACK",
 };
 
 static uint32_t smd_ch_edge[] = {
-	SMD_APPS_MODEM,
-	SMD_APPS_MODEM,
-	SMD_APPS_MODEM,
 	SMD_APPS_MODEM,
 	SMD_APPS_MODEM,
 	SMD_APPS_MODEM,
@@ -797,10 +779,6 @@ static uint32_t smd_ch_edge[] = {
 	SMD_APPS_MODEM,
 	SMD_APPS_QDSP,
 	SMD_APPS_WCNSS,
-	SMD_APPS_QDSP,
-	SMD_APPS_QDSP,
-	SMD_APPS_QDSP,
-	SMD_APPS_QDSP,
 	SMD_APPS_MODEM,
 };
 #endif
@@ -872,17 +850,12 @@ int smd_pkt_open(struct inode *inode, struct file *file)
 		peripheral = smd_edge_to_subsystem(
 				smd_ch_edge[smd_pkt_devp->i]);
 		if (peripheral) {
-			smd_pkt_devp->pil = subsystem_get(peripheral);
+			smd_pkt_devp->pil = pil_get(peripheral);
 			if (IS_ERR(smd_pkt_devp->pil)) {
 				r = PTR_ERR(smd_pkt_devp->pil);
-				pr_err("%s failed on smd_pkt_dev id:%d - subsystem_get failed for %s\n",
-					__func__, smd_pkt_devp->i, peripheral);
-				/*
-				 * Sleep inorder to reduce the frequency of
-				 * retry by user-space modules and to avoid
-				 * possible watchdog bite.
-				 */
-				msleep((smd_pkt_devp->open_modem_wait * 1000));
+				pr_err("%s failed on smd_pkt_dev id:%d -"
+				       " pil_get failed for %s\n", __func__,
+					smd_pkt_devp->i, peripheral);
 				goto release_pd;
 			}
 
@@ -962,7 +935,7 @@ int smd_pkt_open(struct inode *inode, struct file *file)
 	}
 release_pil:
 	if (peripheral && (r < 0))
-		subsystem_put(smd_pkt_devp->pil);
+		pil_put(smd_pkt_devp->pil);
 
 release_pd:
 	if (r < 0) {
@@ -1006,7 +979,7 @@ int smd_pkt_release(struct inode *inode, struct file *file)
 		platform_driver_unregister(&smd_pkt_devp->driver);
 		smd_pkt_devp->driver.probe = NULL;
 		if (smd_pkt_devp->pil)
-			subsystem_put(smd_pkt_devp->pil);
+			pil_put(smd_pkt_devp->pil);
 		smd_pkt_devp->has_reset = 0;
 		smd_pkt_devp->do_reset_notification = 0;
 		smd_pkt_devp->wakelock_locked = 0;
@@ -1037,13 +1010,6 @@ static int __init smd_pkt_init(void)
 	int i;
 	int r;
 
-	if (ARRAY_SIZE(smd_ch_name) != NUM_SMD_PKT_PORTS ||
-			ARRAY_SIZE(smd_ch_edge) != NUM_SMD_PKT_PORTS ||
-			ARRAY_SIZE(smd_pkt_dev_name) != NUM_SMD_PKT_PORTS) {
-		pr_err("%s: mismatch in number of ports\n", __func__);
-		BUG();
-	}
-
 	r = alloc_chrdev_region(&smd_pkt_number,
 			       0,
 			       NUM_SMD_PKT_PORTS,
@@ -1062,6 +1028,9 @@ static int __init smd_pkt_init(void)
 	}
 
 	for (i = 0; i < NUM_SMD_PKT_PORTS; ++i) {
+#if defined (CONFIG_BCMDHD) && !defined (CONFIG_WCNSS_CORE) && defined (CONFIG_MACH_APQ8064_GVAR_CMCC) //for wifi changed by wo0ngs,  2013-04-26
+		if (smd_ch_edge[i]  != SMD_APPS_WCNSS) {
+#endif			
 		smd_pkt_devp[i] = kzalloc(sizeof(struct smd_pkt_dev),
 					 GFP_KERNEL);
 		if (IS_ERR(smd_pkt_devp[i])) {
@@ -1118,8 +1087,13 @@ static int __init smd_pkt_init(void)
 					&dev_attr_open_timeout))
 			pr_err("%s: unable to create device attr for"
 			       " smd_pkt_dev id:%d\n", __func__, i);
+#if defined (CONFIG_BCMDHD) && !defined (CONFIG_WCNSS_CORE) && defined (CONFIG_MACH_APQ8064_GVAR_CMCC) //for wifi changed by wo0ngs,  2013-04-26
 	}
-
+	else {
+		pr_err("%s: brcm except  SMD_APPS_WCNSS cdev id: %d\n", __func__, i);
+	}
+#endif
+	}
 	INIT_DELAYED_WORK(&loopback_work, loopback_probe_worker);
 
 	smd_pkt_ilctxt = ipc_log_context_create(SMD_PKT_IPC_LOG_PAGE_CNT,

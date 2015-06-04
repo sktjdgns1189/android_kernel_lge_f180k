@@ -1,4 +1,4 @@
-/* Copyright (c) 2011-2013, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2011-2012, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -125,28 +125,9 @@ static struct pm8xxx_gpio_init pm8921_gpios[] __initdata = {
 	PM8921_GPIO_INPUT(35, PM_GPIO_PULL_UP_30),
 	PM8921_GPIO_INPUT(38, PM_GPIO_PULL_UP_30),
 	/* TABLA CODEC RESET */
-	PM8921_GPIO_OUTPUT(34, 1, HIGH),
+	PM8921_GPIO_OUTPUT(34, 0, MED),
 	PM8921_GPIO_OUTPUT(13, 0, HIGH),               /* PCIE_CLK_PWR_EN */
 	PM8921_GPIO_INPUT(12, PM_GPIO_PULL_UP_30),     /* PCIE_WAKE_N */
-};
-
-static struct pm8xxx_gpio_init pm8921_fsm8064_ep_gpios[] __initdata = {
-	PM8921_GPIO_OUTPUT_VIN(1, 1, PM_GPIO_VIN_VPH),	/* 5V reg */
-	PM8921_GPIO_OUTPUT_VIN(12, 1, PM_GPIO_VIN_VPH),	/* 12V reg */
-	/* De-assert CW_GPS_RST_N for CW GPS module to lock to GPS source */
-	PM8921_GPIO_OUTPUT_VIN(14, 1, PM_GPIO_VIN_VPH),
-	/* PPS_SRC_SEL_N, chooses between WGR7640 PPS source (high) or
-	 * CW GPS module PPS source (low) */
-	PM8921_GPIO_OUTPUT_VIN(19, 0, PM_GPIO_VIN_VPH),	/* PPS_SRC_SEL_N */
-
-	PM8921_GPIO_OUTPUT_VIN(13, 1, PM_GPIO_VIN_VPH),	/* PCIE_CLK_PWR_EN */
-	PM8921_GPIO_OUTPUT_VIN(37, 1, PM_GPIO_VIN_VPH),	/* PCIE_RST_N */
-	PM8921_GPIO_INPUT(11, PM_GPIO_PULL_UP_30),	/* PCIE_WAKE_N */
-
-	PM8921_GPIO_OUTPUT_VIN(23, 1, PM_GPIO_VIN_VPH),	/* USB2_HSIC_RST_N */
-
-	PM8921_GPIO_OUTPUT_VIN(24, 1, PM_GPIO_VIN_VPH),	/* USB3_RST_N */
-	PM8921_GPIO_OUTPUT_VIN(34, 1, PM_GPIO_VIN_VPH),	/* USB4_RST_N */
 };
 
 static struct pm8xxx_gpio_init pm8921_mtp_kp_gpios[] __initdata = {
@@ -162,11 +143,6 @@ static struct pm8xxx_gpio_init pm8921_cdp_kp_gpios[] __initdata = {
 
 static struct pm8xxx_gpio_init pm8921_mpq8064_hrd_gpios[] __initdata = {
 	PM8921_GPIO_OUTPUT(37, 0, LOW),	/* MUX1_SEL */
-	PM8921_GPIO_INPUT(40, PM_GPIO_PULL_UP_30), /* irq for sx150 exp2 */
-};
-
-static struct pm8xxx_gpio_init touchscreen_gpios[] __initdata = {
-	PM8921_GPIO_OUTPUT(23, 0, HIGH),	/* touchscreen power FET */
 };
 
 /* Initial PM8917 GPIO configurations */
@@ -193,6 +169,10 @@ static struct pm8xxx_gpio_init pm8917_cdp_kp_gpios[] __initdata = {
 	PM8921_GPIO_INPUT(17, PM_GPIO_PULL_UP_1P5),	/* SD_WP */
 };
 
+static struct pm8xxx_gpio_init pm8921_8917_cdp_ts_gpios[] __initdata = {
+	PM8921_GPIO_OUTPUT(23, 0, HIGH),	/* touchscreen power FET */
+};
+
 static struct pm8xxx_gpio_init pm8921_mpq_gpios[] __initdata = {
 	PM8921_GPIO_INIT(27, PM_GPIO_DIR_IN, PM_GPIO_OUT_BUF_CMOS, 0,
 			PM_GPIO_PULL_NO, PM_GPIO_VIN_VPH, PM_GPIO_STRENGTH_NO,
@@ -211,6 +191,10 @@ static struct pm8xxx_mpp_init pm8xxx_mpps[] __initdata = {
 	PM8921_MPP_INIT(1, D_OUTPUT, PM8921_MPP_DIG_LEVEL_VPH, DOUT_CTRL_HIGH),
 };
 
+static struct pm8xxx_gpio_init pm8921_sglte2_gpios[] __initdata = {
+	PM8921_GPIO_OUTPUT(23, 1, HIGH),		/* PM2QSC_SOFT_RESET */
+	PM8921_GPIO_OUTPUT(21, 1, HIGH),		/* PM2QSC_KEYPADPWR */
+};
 
 void __init apq8064_configure_gpios(struct pm8xxx_gpio_init *data, int len)
 {
@@ -228,42 +212,32 @@ void __init apq8064_pm8xxx_gpio_mpp_init(void)
 {
 	int i, rc;
 
-	if (socinfo_get_pmic_model() != PMIC_MODEL_PM8917) {
-		/* PCIE_CLK_PWR_EN is 23 and PCIE_WAKE_N is 22
-		   for MPQ8064 Hybrid */
-		if (machine_is_mpq8064_hrd()) {
-			int size = ARRAY_SIZE(pm8921_gpios);
-			for (i = 0; i < size; i++)
-				if (pm8921_gpios[i].gpio == 13)
-					pm8921_gpios[i].gpio = 23;
-				else if (pm8921_gpios[i].gpio == 12)
-					pm8921_gpios[i].gpio = 22;
-		}
-
-		if (machine_is_fsm8064_ep())
-			apq8064_configure_gpios(pm8921_fsm8064_ep_gpios,
-					ARRAY_SIZE(pm8921_fsm8064_ep_gpios));
-		else
-			apq8064_configure_gpios(pm8921_gpios,
-					ARRAY_SIZE(pm8921_gpios));
-	} else {
+	if (socinfo_get_pmic_model() != PMIC_MODEL_PM8917)
+		apq8064_configure_gpios(pm8921_gpios, ARRAY_SIZE(pm8921_gpios));
+	else
 		apq8064_configure_gpios(pm8917_gpios, ARRAY_SIZE(pm8917_gpios));
-	}
 
 	if (machine_is_apq8064_cdp() || machine_is_apq8064_liquid()) {
-		apq8064_configure_gpios(touchscreen_gpios,
-					ARRAY_SIZE(touchscreen_gpios));
 		if (socinfo_get_pmic_model() != PMIC_MODEL_PM8917)
 			apq8064_configure_gpios(pm8921_cdp_kp_gpios,
 					ARRAY_SIZE(pm8921_cdp_kp_gpios));
 		else
 			apq8064_configure_gpios(pm8917_cdp_kp_gpios,
 					ARRAY_SIZE(pm8917_cdp_kp_gpios));
+
+		apq8064_configure_gpios(pm8921_8917_cdp_ts_gpios,
+				ARRAY_SIZE(pm8921_8917_cdp_ts_gpios));
 	}
 
-	if (machine_is_apq8064_mtp())
+	if (machine_is_apq8064_mtp()) {
 		apq8064_configure_gpios(pm8921_mtp_kp_gpios,
 					ARRAY_SIZE(pm8921_mtp_kp_gpios));
+		if (socinfo_get_platform_subtype() ==
+					PLATFORM_SUBTYPE_SGLTE2) {
+			apq8064_configure_gpios(pm8921_sglte2_gpios,
+					ARRAY_SIZE(pm8921_sglte2_gpios));
+		}
+	}
 
 	if (machine_is_mpq8064_cdp() || machine_is_mpq8064_hrd()
 	    || machine_is_mpq8064_dtv())
@@ -294,7 +268,7 @@ static struct pm8xxx_misc_platform_data apq8064_pm8921_misc_pdata = {
 	.priority		= 0,
 };
 
-#define PM8921_LC_LED_MAX_CURRENT	4	/* I = 4mA */
+#define PM8921_LC_LED_MAX_CURRENT	12	/* I = 12mA */
 #define PM8921_LC_LED_LOW_CURRENT	1	/* I = 1mA */
 #define PM8XXX_LED_PWM_PERIOD		1000
 #define PM8XXX_LED_PWM_DUTY_MS		20
@@ -307,7 +281,11 @@ static struct pm8xxx_misc_platform_data apq8064_pm8921_misc_pdata = {
 static struct led_info pm8921_led_info[] = {
 	[0] = {
 		.name			= "led:red",
-		.default_trigger	= "ac-online",
+		.default_trigger	= "battery-charging",
+	},
+	[1] = {
+		.name			= "led:green",
+		.default_trigger	= "battery-full",
 	},
 };
 
@@ -343,6 +321,14 @@ static struct pm8xxx_led_config pm8921_led_configs[] = {
 		.mode = PM8XXX_LED_MODE_PWM2,
 		.max_current = PM8921_LC_LED_MAX_CURRENT,
 		.pwm_channel = 5,
+		.pwm_period_us = PM8XXX_LED_PWM_PERIOD,
+		.pwm_duty_cycles = &pm8921_led0_pwm_duty_cycles,
+	},
+	[1] = {
+		.id = PM8XXX_ID_LED_1,
+		.mode = PM8XXX_LED_MODE_PWM1,
+		.max_current = PM8921_LC_LED_MAX_CURRENT,
+		.pwm_channel = 4,
 		.pwm_period_us = PM8XXX_LED_PWM_PERIOD,
 		.pwm_duty_cycles = &pm8921_led0_pwm_duty_cycles,
 	},
@@ -453,6 +439,7 @@ apq8064_pm8921_chg_pdata __devinitdata = {
 	.thermal_mitigation	= apq8064_pm8921_therm_mitigation,
 	.thermal_levels		= ARRAY_SIZE(apq8064_pm8921_therm_mitigation),
 	.rconn_mohm		= 18,
+	.enable_tcxo_warmup_delay = true,
 };
 
 static struct pm8xxx_ccadc_platform_data

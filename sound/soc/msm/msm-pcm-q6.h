@@ -59,7 +59,6 @@ struct msm_audio {
 	uint16_t source; /* Encoding source bit mask */
 
 	struct audio_client *audio_client;
-	struct audio_client *enc_audio_client;
 
 	uint16_t session_id;
 
@@ -82,8 +81,8 @@ struct msm_audio {
 	int periods;
 	int mmap_flag;
 	atomic_t pending_buffer;
-	bool set_channel_map;
-	char channel_map[8];
+	int cmd_interrupt;
+	bool meta_data_mode;
 };
 
 struct output_meta_data_st {

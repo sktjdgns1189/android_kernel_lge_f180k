@@ -1,4 +1,4 @@
-/* Copyright (c) 2010-2012, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2010-2013, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -32,6 +32,7 @@ struct buf_addr_table {
 	unsigned long kernel_vaddr;
 	unsigned long phy_addr;
 	unsigned long buff_ion_flag;
+	unsigned long buff_len;
 	struct ion_handle *buff_ion_handle;
 	int pmem_fd;
 	struct file *file;

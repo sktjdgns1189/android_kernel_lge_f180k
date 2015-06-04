@@ -1,4 +1,4 @@
-/* Copyright (c) 2010-2014, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -27,18 +27,10 @@
 #include <linux/of_address.h>
 #include <linux/slab.h>
 #include <linux/spinlock.h>
-#include <linux/clk.h>
-#include <linux/err.h>
-#include <linux/power_supply.h>
-#include <linux/regulator/consumer.h>
-#include <linux/workqueue.h>
-#include <linux/mutex.h>
 #include <asm/hardware/gic.h>
 #include <asm/arch_timer.h>
 #include <mach/gpio.h>
 #include <mach/mpm.h>
-#include <mach/clk.h>
-#include <mach/rpm-regulator-smd.h>
 
 enum {
 	MSM_MPM_GIC_IRQ_DOMAIN,
@@ -59,14 +51,11 @@ struct mpm_irqs_a2m {
 	unsigned long pin;
 	struct hlist_node node;
 };
-#define MAX_DOMAIN_NAME 5
 
 struct mpm_irqs {
 	struct irq_domain *domain;
 	unsigned long *enabled_irqs;
 	unsigned long *wakeup_irqs;
-	unsigned long size;
-	char domain_name[MAX_DOMAIN_NAME];
 };
 
 static struct mpm_irqs unlisted_irqs[MSM_MPM_NR_IRQ_DOMAINS];
@@ -78,22 +67,19 @@ static unsigned int msm_mpm_irqs_m2a[MSM_MPM_NR_MPM_IRQS];
 #define MSM_MPM_IRQ_INDEX(irq)  (irq / 32)
 #define MSM_MPM_IRQ_MASK(irq)  BIT(irq % 32)
 
+#define MSM_MPM_DETECT_CTL_INDEX(irq) (irq / 16)
+#define MSM_MPM_DETECT_CTL_SHIFT(irq) ((irq % 16) * 2)
+
 #define hashfn(val) (val % MSM_MPM_NR_MPM_IRQS)
 #define SCLK_HZ (32768)
 #define ARCH_TIMER_HZ (19200000)
 static struct msm_mpm_device_data msm_mpm_dev_data;
 
-static struct clk *xo_clk;
-static bool xo_enabled;
-static struct workqueue_struct *msm_mpm_wq;
-static struct work_struct msm_mpm_work;
-static struct completion wake_wq;
-
 enum mpm_reg_offsets {
 	MSM_MPM_REG_WAKEUP,
 	MSM_MPM_REG_ENABLE,
-	MSM_MPM_REG_FALLING_EDGE,
-	MSM_MPM_REG_RISING_EDGE,
+	MSM_MPM_REG_DETECT_CTL,
+	MSM_MPM_REG_DETECT_CTL1,
 	MSM_MPM_REG_POLARITY,
 	MSM_MPM_REG_STATUS,
 };
@@ -102,8 +88,7 @@ static DEFINE_SPINLOCK(msm_mpm_lock);
 
 static uint32_t msm_mpm_enabled_irq[MSM_MPM_REG_WIDTH];
 static uint32_t msm_mpm_wake_irq[MSM_MPM_REG_WIDTH];
-static uint32_t msm_mpm_falling_edge[MSM_MPM_REG_WIDTH];
-static uint32_t msm_mpm_rising_edge[MSM_MPM_REG_WIDTH];
+static uint32_t msm_mpm_detect_ctl[MSM_MPM_REG_WIDTH * 2];
 static uint32_t msm_mpm_polarity[MSM_MPM_REG_WIDTH];
 
 enum {
@@ -186,17 +171,14 @@ static void msm_mpm_set(cycle_t wakeup, bool wakeset)
 		reg = MSM_MPM_REG_ENABLE;
 		msm_mpm_write(reg, i, irqs[i]);
 
-		reg = MSM_MPM_REG_FALLING_EDGE;
-		msm_mpm_write(reg, i, msm_mpm_falling_edge[i]);
+		reg = MSM_MPM_REG_DETECT_CTL;
+		msm_mpm_write(reg, i, msm_mpm_detect_ctl[i]);
 
-		reg = MSM_MPM_REG_RISING_EDGE;
-		msm_mpm_write(reg, i, msm_mpm_rising_edge[i]);
+		reg = MSM_MPM_REG_DETECT_CTL1;
+		msm_mpm_write(reg, i, msm_mpm_detect_ctl[2+i]);
 
 		reg = MSM_MPM_REG_POLARITY;
 		msm_mpm_write(reg, i, msm_mpm_polarity[i]);
-
-		reg = MSM_MPM_REG_STATUS;
-		msm_mpm_write(reg, i, 0);
 	}
 
 	/*
@@ -220,16 +202,12 @@ static inline uint16_t msm_mpm_get_irq_a2m(struct irq_data *d)
 	hlist_for_each_entry(node, elem, &irq_hash[hashfn(d->hwirq)], node) {
 		if ((node->hwirq == d->hwirq)
 				&& (d->domain == node->domain)) {
-			/*
-			 * Update the linux irq mapping. No update required for
-			 * bypass interrupts
-			 */
-			if (node->pin != 0xff)
-				msm_mpm_irqs_m2a[node->pin] = d->irq;
+			/* Update the linux irq mapping */
+			msm_mpm_irqs_m2a[node->pin] = d->irq;
 			break;
 		}
 	}
-	return elem ? node->pin : 0;
+	return node ? node->pin : 0;
 }
 
 static int msm_mpm_enable_irq_exclusive(
@@ -275,31 +253,28 @@ static int msm_mpm_enable_irq_exclusive(
 		else
 			__clear_bit(d->hwirq, irq_apps);
 
-		if (!wakeset && (msm_mpm_initialized & MSM_MPM_DEVICE_PROBED))
-			complete(&wake_wq);
 	}
 
 	return 0;
 }
 
-static void msm_mpm_set_edge_ctl(int pin, unsigned int flow_type)
+static void msm_mpm_set_detect_ctl(int pin, unsigned int flow_type)
 {
 	uint32_t index;
-	uint32_t mask;
+	uint32_t val = 0;
+	uint32_t shift;
 
-	index = MSM_MPM_IRQ_INDEX(pin);
-	mask = MSM_MPM_IRQ_MASK(pin);
-
-	if (flow_type & IRQ_TYPE_EDGE_FALLING)
-		msm_mpm_falling_edge[index] |= mask;
-	else
-		msm_mpm_falling_edge[index] &= ~mask;
+	index = MSM_MPM_DETECT_CTL_INDEX(pin);
+	shift = MSM_MPM_DETECT_CTL_SHIFT(pin);
 
 	if (flow_type & IRQ_TYPE_EDGE_RISING)
-		msm_mpm_rising_edge[index] |= mask;
-	else
-		msm_mpm_rising_edge[index] &= ~mask;
+		val |= 0x02;
 
+	if (flow_type & IRQ_TYPE_EDGE_FALLING)
+		val |= 0x01;
+
+	msm_mpm_detect_ctl[index] &= ~(0x3 << shift);
+	msm_mpm_detect_ctl[index] |= (val & 0x03) << shift;
 }
 
 static int msm_mpm_set_irq_type_exclusive(
@@ -319,7 +294,7 @@ static int msm_mpm_set_irq_type_exclusive(
 		if (index >= MSM_MPM_REG_WIDTH)
 			return -EFAULT;
 
-		msm_mpm_set_edge_ctl(mpm_irq, flow_type);
+		msm_mpm_set_detect_ctl(mpm_irq, flow_type);
 
 		if (flow_type &  IRQ_TYPE_LEVEL_HIGH)
 			msm_mpm_polarity[index] |= mask;
@@ -397,7 +372,7 @@ int msm_mpm_enable_pin(unsigned int pin, unsigned int enable)
 	if (!msm_mpm_is_initialized())
 		return -EINVAL;
 
-	if (pin >= MSM_MPM_NR_MPM_IRQS)
+	if (pin > MSM_MPM_NR_MPM_IRQS)
 		return -EINVAL;
 
 	spin_lock_irqsave(&msm_mpm_lock, flags);
@@ -448,7 +423,7 @@ int msm_mpm_set_pin_type(unsigned int pin, unsigned int flow_type)
 
 	spin_lock_irqsave(&msm_mpm_lock, flags);
 
-	msm_mpm_set_edge_ctl(pin, flow_type);
+	msm_mpm_set_detect_ctl(pin, flow_type);
 
 	if (flow_type & IRQ_TYPE_LEVEL_HIGH)
 		msm_mpm_polarity[index] |= mask;
@@ -459,56 +434,29 @@ int msm_mpm_set_pin_type(unsigned int pin, unsigned int flow_type)
 	return 0;
 }
 
-static bool msm_mpm_interrupts_detectable(int d, bool from_idle)
+bool msm_mpm_irqs_detectable(bool from_idle)
 {
-	unsigned long *irq_bitmap;
-	bool debug_mask, ret = false;
-	struct mpm_irqs *unlisted = &unlisted_irqs[d];
+	/* TODO:
+	 * Return true if unlisted irqs is empty
+	 */
 
 	if (!msm_mpm_is_initialized())
 		return false;
 
-	if (from_idle) {
-		irq_bitmap = unlisted->enabled_irqs;
-		debug_mask = msm_mpm_debug_mask &
-				MSM_MPM_DEBUG_NON_DETECTABLE_IRQ_IDLE;
-	} else {
-		irq_bitmap = unlisted->wakeup_irqs;
-		debug_mask = msm_mpm_debug_mask &
-				MSM_MPM_DEBUG_NON_DETECTABLE_IRQ;
-	}
-
-	ret = (bool) __bitmap_empty(irq_bitmap, unlisted->size);
-
-	if (debug_mask && !ret) {
-		int i = 0;
-		i = find_first_bit(irq_bitmap, unlisted->size);
-		pr_info("%s(): %s preventing system sleep modes during %s\n",
-				__func__, unlisted->domain_name,
-				from_idle ? "idle" : "suspend");
-
-		while (i < unlisted->size) {
-			pr_info("\thwirq: %d\n", i);
-			i = find_next_bit(irq_bitmap, unlisted->size, i + 1);
-		}
-	}
-
-	return ret;
+	return true;
 }
 
 bool msm_mpm_gpio_irqs_detectable(bool from_idle)
 {
-	return msm_mpm_interrupts_detectable(MSM_MPM_GPIO_IRQ_DOMAIN,
-			from_idle);
-}
-bool msm_mpm_irqs_detectable(bool from_idle)
-{
-	return msm_mpm_interrupts_detectable(MSM_MPM_GIC_IRQ_DOMAIN,
-			from_idle);
+	/* TODO:
+	 * Return true if unlisted irqs is empty
+	 */
+	if (!msm_mpm_is_initialized())
+		return false;
+	return true;
 }
 
-void msm_mpm_enter_sleep(uint32_t sclk_count, bool from_idle,
-		const struct cpumask *cpumask)
+void msm_mpm_enter_sleep(uint32_t sclk_count, bool from_idle)
 {
 	cycle_t wakeup = (u64)sclk_count * ARCH_TIMER_HZ;
 
@@ -525,13 +473,11 @@ void msm_mpm_enter_sleep(uint32_t sclk_count, bool from_idle,
 	}
 
 	msm_mpm_set(wakeup, !from_idle);
-	irq_set_affinity(msm_mpm_dev_data.mpm_ipc_irq, cpumask);
 }
 
 void msm_mpm_exit_sleep(bool from_idle)
 {
 	unsigned long pending;
-	uint32_t *enabled_intr;
 	int i;
 	int k;
 
@@ -540,16 +486,12 @@ void msm_mpm_exit_sleep(bool from_idle)
 		return;
 	}
 
-	enabled_intr = from_idle ? msm_mpm_enabled_irq :
-						msm_mpm_wake_irq;
-
 	for (i = 0; i < MSM_MPM_REG_WIDTH; i++) {
 		pending = msm_mpm_read(MSM_MPM_REG_STATUS, i);
-		pending &= enabled_intr[i];
 
 		if (MSM_MPM_DEBUG_PENDING_IRQ & msm_mpm_debug_mask)
-			pr_info("%s: enabled_intr pending.%d: 0x%08x 0x%08lx\n",
-				__func__, i, enabled_intr[i], pending);
+			pr_info("%s: pending.%d: 0x%08lx", __func__,
+					i, pending);
 
 		k = find_first_bit(&pending, 32);
 		while (k < 32) {
@@ -571,58 +513,6 @@ void msm_mpm_exit_sleep(bool from_idle)
 		}
 	}
 }
-static void msm_mpm_sys_low_power_modes(bool allow)
-{
-	static DEFINE_MUTEX(enable_xo_mutex);
-
-	mutex_lock(&enable_xo_mutex);
-	if (allow) {
-		if (xo_enabled) {
-			clk_disable_unprepare(xo_clk);
-			xo_enabled = false;
-		}
-	} else {
-		if (!xo_enabled) {
-			/* If we cannot enable XO clock then we want to flag it,
-			 * than having to deal with not being able to wakeup
-			 * from a non-monitorable interrupt
-			 */
-			BUG_ON(clk_prepare_enable(xo_clk));
-			xo_enabled = true;
-		}
-	}
-	mutex_unlock(&enable_xo_mutex);
-}
-
-void msm_mpm_suspend_prepare(void)
-{
-	bool allow = msm_mpm_irqs_detectable(false) &&
-		msm_mpm_gpio_irqs_detectable(false);
-	msm_mpm_sys_low_power_modes(allow);
-}
-EXPORT_SYMBOL(msm_mpm_suspend_prepare);
-
-void msm_mpm_suspend_wake(void)
-{
-	bool allow = msm_mpm_irqs_detectable(true) &&
-		msm_mpm_gpio_irqs_detectable(true);
-	msm_mpm_sys_low_power_modes(allow);
-}
-EXPORT_SYMBOL(msm_mpm_suspend_wake);
-
-static void msm_mpm_work_fn(struct work_struct *work)
-{
-	unsigned long flags;
-	while (1) {
-		bool allow;
-		wait_for_completion(&wake_wq);
-		spin_lock_irqsave(&msm_mpm_lock, flags);
-		allow = msm_mpm_irqs_detectable(true) &&
-				msm_mpm_gpio_irqs_detectable(true);
-		spin_unlock_irqrestore(&msm_mpm_lock, flags);
-		msm_mpm_sys_low_power_modes(allow);
-	}
-}
 
 static int __devinit msm_mpm_dev_probe(struct platform_device *pdev)
 {
@@ -635,90 +525,73 @@ static int __devinit msm_mpm_dev_probe(struct platform_device *pdev)
 		return 0;
 	}
 
-	xo_clk = devm_clk_get(&pdev->dev, "xo");
-
-	if (IS_ERR(xo_clk)) {
-		pr_err("%s(): Cannot get clk resource for XO\n", __func__);
-		return PTR_ERR(xo_clk);
-	}
-
 	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "vmpm");
 	if (!res) {
 		pr_err("%s(): Missing RPM memory resource\n", __func__);
-		return -EINVAL;
+		goto fail;
 	}
 
 	dev->mpm_request_reg_base = devm_request_and_ioremap(&pdev->dev, res);
 
 	if (!dev->mpm_request_reg_base) {
 		pr_err("%s(): Unable to iomap\n", __func__);
-		return -EADDRNOTAVAIL;
+		goto fail;
 	}
 
 	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "ipc");
 	if (!res) {
 		pr_err("%s(): Missing GCC memory resource\n", __func__);
-		return -EINVAL;
+		goto failed_irq_get;
 	}
 
 	dev->mpm_apps_ipc_reg = devm_ioremap(&pdev->dev, res->start,
 					resource_size(res));
-	if (!dev->mpm_apps_ipc_reg) {
-		pr_err("%s(): Unable to iomap IPC register\n", __func__);
-		return -EADDRNOTAVAIL;
-	}
 
 	if (of_property_read_u32(pdev->dev.of_node,
 				"qcom,ipc-bit-offset", &offset)) {
 		pr_info("%s(): Cannot read ipc bit offset\n", __func__);
-		return -EINVAL ;
+		goto failed_free_irq;
 	}
 
 	dev->mpm_apps_ipc_val = (1 << offset);
+
+	if (!dev->mpm_apps_ipc_reg)
+		goto failed_irq_get;
 
 	dev->mpm_ipc_irq = platform_get_irq(pdev, 0);
 
 	if (dev->mpm_ipc_irq == -ENXIO) {
 		pr_info("%s(): Cannot find IRQ resource\n", __func__);
-		return -ENXIO;
+		goto failed_irq_get;
 	}
-	ret = devm_request_irq(&pdev->dev, dev->mpm_ipc_irq, msm_mpm_irq,
-			IRQF_TRIGGER_RISING | IRQF_NO_SUSPEND, pdev->name,
-			msm_mpm_irq);
+	ret = request_irq(dev->mpm_ipc_irq, msm_mpm_irq,
+			IRQF_TRIGGER_RISING, pdev->name, msm_mpm_irq);
 
 	if (ret) {
 		pr_info("%s(): request_irq failed errno: %d\n", __func__, ret);
-		return ret;
+		goto failed_irq_get;
 	}
 	ret = irq_set_irq_wake(dev->mpm_ipc_irq, 1);
 
 	if (ret) {
 		pr_err("%s: failed to set wakeup irq %u: %d\n",
 			__func__, dev->mpm_ipc_irq, ret);
-		return ret;
+		goto failed_irq_get;
 
 	}
-
-	init_completion(&wake_wq);
-
-	INIT_WORK(&msm_mpm_work, msm_mpm_work_fn);
-	msm_mpm_wq = create_singlethread_workqueue("mpm");
-
-	if (msm_mpm_wq)
-		queue_work(msm_mpm_wq, &msm_mpm_work);
-	else  {
-		pr_warn("%s(): Failed to create wq. So voting against XO off",
-				__func__);
-		/* Throw a BUG. Otherwise, its possible that system allows
-		 * XO shutdown when there are non-monitored interrupts are
-		 * pending and cause errors at a later point in time.
-		 */
-		BUG_ON(clk_prepare_enable(xo_clk));
-		xo_enabled = true;
-	}
-
 	msm_mpm_initialized |= MSM_MPM_DEVICE_PROBED;
+
 	return 0;
+
+failed_free_irq:
+	free_irq(dev->mpm_ipc_irq, msm_mpm_irq);
+failed_irq_get:
+	if (dev->mpm_apps_ipc_reg)
+		devm_iounmap(&pdev->dev, dev->mpm_apps_ipc_reg);
+	if (dev->mpm_request_reg_base)
+		devm_iounmap(&pdev->dev, dev->mpm_request_reg_base);
+fail:
+	return -EINVAL;
 }
 
 static inline int __init mpm_irq_domain_linear_size(struct irq_domain *d)
@@ -738,7 +611,6 @@ void __init of_mpm_init(struct device_node *node)
 	struct mpm_of {
 		char *pkey;
 		char *map;
-		char name[MAX_DOMAIN_NAME];
 		struct irq_chip *chip;
 		int (*get_max_irqs)(struct irq_domain *d);
 	};
@@ -748,14 +620,12 @@ void __init of_mpm_init(struct device_node *node)
 		{
 			"qcom,gic-parent",
 			"qcom,gic-map",
-			"gic",
 			&gic_arch_extn,
 			mpm_irq_domain_linear_size,
 		},
 		{
 			"qcom,gpio-parent",
 			"qcom,gpio-map",
-			"gpio",
 			&msm_gpio_irq_extn,
 			mpm_irq_domain_legacy_size,
 		},
@@ -792,9 +662,6 @@ void __init of_mpm_init(struct device_node *node)
 		}
 
 		size = mpm_of_map[i].get_max_irqs(domain);
-		unlisted_irqs[i].size = size;
-		memcpy(unlisted_irqs[i].domain_name, mpm_of_map[i].name,
-				MAX_DOMAIN_NAME);
 
 		unlisted_irqs[i].enabled_irqs =
 			kzalloc(BITS_TO_LONGS(size) * sizeof(unsigned long),
@@ -864,7 +731,7 @@ void __init of_mpm_init(struct device_node *node)
 	return;
 
 failed_malloc:
-	for (i = 0; i < MSM_MPM_NR_IRQ_DOMAINS; i++) {
+	for (i = 0; i < MSM_MPM_NR_MPM_IRQS; i++) {
 		mpm_of_map[i].chip->irq_mask = NULL;
 		mpm_of_map[i].chip->irq_unmask = NULL;
 		mpm_of_map[i].chip->irq_disable = NULL;

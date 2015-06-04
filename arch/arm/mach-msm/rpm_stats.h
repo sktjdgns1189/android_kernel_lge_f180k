@@ -1,4 +1,4 @@
-/* Copyright (c) 2011-2013, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2011, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -19,7 +19,6 @@
 struct msm_rpmstats_platform_data {
 	phys_addr_t phys_addr_base;
 	u32 phys_size;
-	u32 version;
 };
 
 struct msm_rpm_master_stats_platform_data {
@@ -31,11 +30,9 @@ struct msm_rpm_master_stats_platform_data {
 	 * it allocates 256 bytes for this use.
 	 * No of masters differs for different targets.
 	 * Based on the number of masters, linux rpm stat
-	 * driver reads (32 * num_masters) bytes to display
+	 * driver reads (32 * nomasters) bytes to display
 	 * master stats.
 	 */
-	 s32 num_masters;
-	 u32 master_offset;
-	 u32 version;
+	 u32 nomasters;
 };
 #endif

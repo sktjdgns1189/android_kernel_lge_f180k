@@ -21,7 +21,6 @@
 #include <linux/spinlock.h>
 #include <linux/uaccess.h>
 #include <linux/irq.h>
-#include <linux/of.h>
 
 #include <asm/cputype.h>
 #include <asm/irq.h>
@@ -51,8 +50,6 @@ static DEFINE_PER_CPU(struct pmu_hw_events, cpu_hw_events);
 
 /* Set at runtime when we know what CPU type we are. */
 static struct arm_pmu *cpu_pmu;
-
-static int per_cpu_irq;
 
 enum arm_perf_pmu_ids
 armpmu_get_pmu_id(void)
@@ -395,80 +392,6 @@ static irqreturn_t armpmu_platform_irq(int irq, void *dev)
 	return plat->handle_irq(irq, dev, armpmu->handle_irq);
 }
 
-static DEFINE_PER_CPU(u32, pmu_irq_cookie);
-
-void enable_irq_callback(void *info)
-{
-	int irq = *(unsigned int *)info;
-	enable_percpu_irq(irq, IRQ_TYPE_EDGE_RISING);
-}
-
-void disable_irq_callback(void *info)
-{
-	int irq = *(unsigned int *)info;
-	disable_percpu_irq(irq);
-}
-
-int
-multicore_request_irq(int irq, irq_handler_t *handle_irq)
-{
-	int err = 0;
-	int cpu;
-
-	err = request_percpu_irq(irq, *handle_irq, "l1-armpmu",
-			&pmu_irq_cookie);
-
-	if (!err) {
-		for_each_cpu(cpu, cpu_online_mask) {
-			smp_call_function_single(cpu,
-					enable_irq_callback, &irq, 1);
-		}
-	}
-
-	return err;
-}
-
-#ifdef CONFIG_SMP
-static __ref int armpmu_cpu_up(int cpu)
-{
-	int ret = 0;
-
-	if (!cpumask_test_cpu(cpu, cpu_online_mask)) {
-		ret = cpu_up(cpu);
-		if (ret)
-			pr_err("Failed to bring up CPU: %d, ret: %d\n",
-			       cpu, ret);
-	}
-	return ret;
-}
-#else
-static inline int armpmu_cpu_up(int cpu)
-{
-	return 0;
-}
-#endif
-
-void __ref
-multicore_free_irq(int irq)
-{
-	int cpu;
-	struct irq_desc *desc = irq_to_desc(irq);
-
-	if (irq >= 0) {
-		for_each_cpu(cpu, desc->percpu_enabled) {
-			if (!armpmu_cpu_up(cpu))
-				smp_call_function_single(cpu,
-						disable_irq_callback, &irq, 1);
-		}
-		free_percpu_irq(irq, &pmu_irq_cookie);
-	}
-}
-
-struct arm_pmu_platdata multicore_data = {
-	.request_pmu_irq = multicore_request_irq,
-	.free_pmu_irq = multicore_free_irq,
-};
-
 int
 armpmu_generic_request_irq(int irq, irq_handler_t *handle_irq)
 {
@@ -776,16 +699,13 @@ arch_initcall(cpu_pmu_reset);
 static struct of_device_id armpmu_of_device_ids[] = {
 	{.compatible = "arm,cortex-a9-pmu"},
 	{.compatible = "arm,cortex-a8-pmu"},
-	{.compatible = "arm,cortex-a7-pmu"},
-	{.compatible = "arm,cortex-a5-pmu"},
 	{.compatible = "arm,arm1136-pmu"},
 	{.compatible = "arm,arm1176-pmu"},
-	{.compatible = "qcom,krait-pmu"},
 	{},
 };
 
 static struct platform_device_id armpmu_plat_device_ids[] = {
-	{.name = "cpu-pmu"},
+	{.name = "cpu-arm-pmu"},
 	{},
 };
 
@@ -795,16 +715,12 @@ static int __devinit armpmu_device_probe(struct platform_device *pdev)
 		return -ENODEV;
 
 	cpu_pmu->plat_device = pdev;
-
-	if (per_cpu_irq == 1)
-		cpu_pmu->plat_device->dev.platform_data = &multicore_data;
-
 	return 0;
 }
 
 static struct platform_driver armpmu_driver = {
 	.driver		= {
-		.name	= "cpu-pmu",
+		.name	= "cpu-arm-pmu",
 		.of_match_table = armpmu_of_device_ids,
 	},
 	.probe		= armpmu_device_probe,
@@ -852,6 +768,18 @@ static int cpu_has_active_perf(int cpu)
 	return 0;
 }
 
+void enable_irq_callback(void *info)
+{
+	int irq = *(unsigned int *)info;
+	enable_percpu_irq(irq, IRQ_TYPE_EDGE_RISING);
+}
+
+void disable_irq_callback(void *info)
+{
+	int irq = *(unsigned int *)info;
+	disable_percpu_irq(irq);
+}
+
 static void armpmu_update_counters(void)
 {
 	struct pmu_hw_events *hw_events;
@@ -893,6 +821,8 @@ static int __cpuinit pmu_cpu_notify(struct notifier_block *b,
 						 hcpu, 1);
 		break;
 	case CPU_STARTING:
+		if (cpu_pmu && cpu_pmu->reset)
+			cpu_pmu->reset(NULL);
 		if (cpu_pmu && cpu_pmu->restore_pm_registers)
 			smp_call_function_single(cpu,
 						 cpu_pmu->restore_pm_registers,
@@ -927,9 +857,8 @@ static int __cpuinit pmu_cpu_notify(struct notifier_block *b,
 				enable_irq_callback(&irq);
 			}
 
-			if (cpu_pmu && cpu_pmu->reset) {
+			if (cpu_pmu) {
 				__get_cpu_var(from_idle) = 1;
-				cpu_pmu->reset(NULL);
 				pmu = &cpu_pmu->pmu;
 				pmu->pmu_enable(pmu);
 				return NOTIFY_OK;
@@ -989,24 +918,6 @@ static int perf_cpu_pm_notifier(struct notifier_block *self, unsigned long cmd,
 static struct notifier_block perf_cpu_pm_notifier_block = {
 	.notifier_call = perf_cpu_pm_notifier,
 };
-
-#ifdef CONFIG_OF
-static inline int get_dt_irq_prop(void)
-{
-	struct device_node *np = NULL;
-	int err = -1;
-
-	np = of_find_matching_node(NULL, armpmu_of_device_ids);
-	if (np)
-		err = of_property_read_bool(np, "qcom,irq-is-percpu");
-	else
-		pr_err("Perf: can't find DT node.\n");
-
-	return err;
-}
-#else
-static inline int get_dt_irq_prop(void) {return 0; }
-#endif
 
 /*
  * CPU PMU identification and registration.
@@ -1083,8 +994,6 @@ init_hw_perf_events(void)
 		register_cpu_notifier(&pmu_cpu_notifier);
 		armpmu_register(cpu_pmu, "cpu", PERF_TYPE_RAW);
 		cpu_pm_register_notifier(&perf_cpu_pm_notifier_block);
-		per_cpu_irq = get_dt_irq_prop();
-
 	} else {
 		pr_info("no hardware support available\n");
 	}

@@ -297,37 +297,9 @@ const char *event_name(struct perf_evsel *evsel)
 {
 	u64 config = evsel->attr.config;
 	int type = evsel->attr.type;
-	char *buf;
-	size_t buf_sz;
 
-	if (evsel->name) {
-		/* Make new space for the modifier bits. */
-		buf_sz = strlen(evsel->name) + 3;
-		buf = malloc(buf_sz);
-		if (!buf)
-			/*
-			 * Always return what was already in 'name'.
-			 */
-			return evsel->name;
-
-		strlcpy(buf, evsel->name, buf_sz);
-
-		free(evsel->name);
-
-		evsel->name = buf;
-
-		/* User mode profiling. */
-		if (!evsel->attr.exclude_user && evsel->attr.exclude_kernel)
-			strlcpy(&evsel->name[strlen(evsel->name)], ":u",
-					buf_sz);
-		/* Kernel mode profiling. */
-		else if (!evsel->attr.exclude_kernel &&
-				evsel->attr.exclude_user)
-			strlcpy(&evsel->name[strlen(evsel->name)], ":k",
-					buf_sz);
-
+	if (evsel->name)
 		return evsel->name;
-	}
 
 	return __event_name(type, config, NULL);
 }
@@ -336,7 +308,7 @@ const char *__event_name(int type, u64 config, char *pmu_name)
 {
 	static char buf[32];
 
-	if (!pmu_name && type == PERF_TYPE_RAW) {
+	if (type == PERF_TYPE_RAW) {
 		sprintf(buf, "raw 0x%" PRIx64, config);
 		return buf;
 	}
@@ -712,7 +684,6 @@ int parse_events_add_pmu(struct list_head *list, int *idx,
 {
 	struct perf_event_attr attr;
 	struct perf_pmu *pmu;
-	char *ev_name;
 
 	pmu = perf_pmu__find(name);
 	if (!pmu)
@@ -729,9 +700,7 @@ int parse_events_add_pmu(struct list_head *list, int *idx,
 	if (perf_pmu__config(pmu, &attr, head_config))
 		return -EINVAL;
 
-	ev_name = (char *) __event_name(attr.type, attr.config, pmu->name);
-
-	return add_event(list, idx, &attr, ev_name);
+	return add_event(list, idx, &attr, pmu->name);
 }
 
 void parse_events_update_lists(struct list_head *list_event,

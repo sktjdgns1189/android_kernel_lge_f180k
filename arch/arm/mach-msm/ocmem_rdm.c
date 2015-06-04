@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2013, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -58,7 +58,6 @@
 #define BR_CLIENT_n_IDX(x) ((x) * 0x4)
 #define BR_CLIENT_n_ctrl(x) (BR_CLIENT_BASE + (BR_CLIENT_n_IDX(x)))
 #define BR_STATUS (0x14)
-#define BR_LAST_ADDR (0x18)
 /* 16 entries per client are supported */
 /* Use entries 0 - 15 for client0 */
 #define BR_CLIENT0_MASK	(0x1000)
@@ -77,7 +76,7 @@
 #define BR_TBL_ENTRY_ENABLE 0x1
 #define BR_TBL_START 0x0
 #define BR_TBL_END 0x8
-#define BR_RW_SHIFT 0x1
+#define BR_RW_SHIFT 0x2
 
 #define DM_TBL_START 0x10
 #define DM_TBL_END 0x18
@@ -94,8 +93,8 @@
 static void *br_base;
 static void *dm_base;
 
-struct completion dm_clear_event;
-struct completion dm_transfer_event;
+static atomic_t dm_pending;
+static wait_queue_head_t dm_wq;
 /* Shadow tables for debug purposes */
 struct ocmem_br_table {
 	unsigned int offset;
@@ -135,24 +134,24 @@ static irqreturn_t ocmem_dm_irq_handler(int irq, void *dev_id)
 	pr_debug("irq:dm_status %x irq_status %x\n", status, irq_status);
 	if (irq_status & BIT(0)) {
 		pr_debug("Data mover completed\n");
-		ocmem_write(BIT(0), dm_base + DM_INTR_CLR);
-		pr_debug("Last re-mapped address block %x\n",
-				ocmem_read(br_base + BR_LAST_ADDR));
-		complete(&dm_transfer_event);
+		irq_status &= ~BIT(0);
+		ocmem_write(irq_status, dm_base + DM_INTR_CLR);
 	} else if (irq_status & BIT(1)) {
 		pr_debug("Data clear engine completed\n");
-		ocmem_write(BIT(1), dm_base + DM_INTR_CLR);
-		complete(&dm_clear_event);
+		irq_status &= ~BIT(1);
+		ocmem_write(irq_status, dm_base + DM_INTR_CLR);
 	} else {
 		BUG_ON(1);
 	}
+	atomic_set(&dm_pending, 0);
+	wake_up_interruptible(&dm_wq);
 	return IRQ_HANDLED;
 }
 
 #ifdef CONFIG_MSM_OCMEM_NONSECURE
 int ocmem_clear(unsigned long start, unsigned long size)
 {
-	INIT_COMPLETION(dm_clear_event);
+	atomic_set(&dm_pending, 1);
 	/* Clear DM Mask */
 	ocmem_write(DM_MASK_RESET, dm_base + DM_INTR_MASK);
 	/* Clear DM Interrupts */
@@ -170,8 +169,8 @@ int ocmem_clear(unsigned long start, unsigned long size)
 	/* Trigger Data Clear */
 	ocmem_write(DM_CLR_ENABLE, dm_base + DM_CLR_TRIGGER);
 
-	wait_for_completion(&dm_clear_event);
-
+	wait_event_interruptible(dm_wq,
+		atomic_read(&dm_pending) == 0);
 	return 0;
 }
 #else
@@ -191,7 +190,6 @@ int ocmem_rdm_transfer(int id, struct ocmem_map_list *clist,
 	int table_end = 0;
 	int br_ctrl = 0;
 	int br_id = 0;
-	int client_id = 0;
 	int dm_ctrl = 0;
 	int i = 0;
 	int j = 0;
@@ -205,11 +203,6 @@ int ocmem_rdm_transfer(int id, struct ocmem_map_list *clist,
 				get_name(id), id);
 		return rc;
 	}
-
-	/* Clear DM Mask */
-	ocmem_write(DM_MASK_RESET, dm_base + DM_INTR_MASK);
-	/* Clear DM Interrupts */
-	ocmem_write(DM_INTR_RESET, dm_base + DM_INTR_CLR);
 
 	for (i = 0, j = slot; i < num_chunks; i++, j++) {
 
@@ -250,15 +243,13 @@ int ocmem_rdm_transfer(int id, struct ocmem_map_list *clist,
 	dm_ctrl |= (table_start << DM_TBL_START);
 	dm_ctrl |= (table_end << DM_TBL_END);
 
-	client_id = client_ctrl_id(id);
-	dm_ctrl |= (client_id << DM_CLIENT_SHIFT);
 	dm_ctrl |= (DM_BR_ID_LPASS << DM_BR_ID_SHIFT);
 	dm_ctrl |= (DM_BLOCK_256 << DM_BR_BLK_SHIFT);
 	dm_ctrl |= (direction << DM_DIR_SHIFT);
 
 	status = ocmem_read(dm_base + DM_GEN_STATUS);
 	pr_debug("Transfer status before %x\n", status);
-	INIT_COMPLETION(dm_transfer_event);
+	atomic_set(&dm_pending, 1);
 	/* The DM and BR tables must be programmed before triggering the
 	 * Data Mover else the coherent transfer would be corrupted
 	 */
@@ -267,8 +258,9 @@ int ocmem_rdm_transfer(int id, struct ocmem_map_list *clist,
 	ocmem_write(dm_ctrl, dm_base + DM_CTRL);
 	pr_debug("ocmem: rdm: dm_ctrl %x br_ctrl %x\n", dm_ctrl, br_ctrl);
 
-	wait_for_completion(&dm_transfer_event);
-	pr_debug("Completed transferring %d segments\n", num_chunks);
+	wait_event_interruptible(dm_wq,
+		atomic_read(&dm_pending) == 0);
+
 	ocmem_disable_core_clock();
 	return 0;
 }
@@ -299,8 +291,11 @@ int ocmem_rdm_init(struct platform_device *pdev)
 		return rc;
 	}
 
-	init_completion(&dm_clear_event);
-	init_completion(&dm_transfer_event);
+	init_waitqueue_head(&dm_wq);
+	/* Clear DM Mask */
+	ocmem_write(DM_MASK_RESET, dm_base + DM_INTR_MASK);
+	/* enable dm interrupts */
+	ocmem_write(DM_INTR_RESET, dm_base + DM_INTR_CLR);
 	ocmem_disable_core_clock();
 	return 0;
 }

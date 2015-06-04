@@ -82,9 +82,7 @@ struct apr_hdr {
 #define APR_SVC_ADSP_CVS	0x0A
 #define APR_SVC_ADSP_CVP	0x0B
 #define APR_SVC_USM		0x0C
-#define APR_SVC_LSM		0x0D
-#define APR_SVC_VIDC		0x16
-#define APR_SVC_MAX		0x17
+#define APR_SVC_MAX		0x0D
 
 /* Modem Service IDs */
 #define APR_SVC_MVS		0x3
@@ -167,5 +165,4 @@ void apr_set_modem_state(enum apr_subsys_state state);
 enum apr_subsys_state apr_get_q6_state(void);
 int apr_set_q6_state(enum apr_subsys_state state);
 void apr_set_subsys_state(void);
-const char *apr_get_lpass_subsys_name(void);
 #endif

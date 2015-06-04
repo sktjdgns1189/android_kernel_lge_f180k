@@ -72,9 +72,6 @@
 #define SW_AUTO_CONT_ACK_EN	BIT(5)
 #define SW_AUTO_CONT_NACK_DN_EN	BIT(6)
 
-/* Shift Values */
-#define RBIF_CONS_DN_SHIFT (0x4)
-
 /* Test values for RBCPR RUMI Testing */
 #define GNT_CNT			0xC0
 #define TARGET			0xEFF
@@ -122,13 +119,27 @@ enum cpr_interrupt {
 };
 
 /**
+ * struct msm_vp_data - structure for VP configuration
+ * @min_volt_mV: minimum milivolt level for VP
+ * @max_volt_mV: maximum milivolt level for VP
+ * @default_volt_mV: default milivolt for VP
+ * @step_size_mV: step size of voltage
+ */
+struct msm_cpr_vp_data {
+	int min_volt;
+	int max_volt;
+	int default_volt;
+	int step_size;
+};
+
+/**
  * struct msm_cpr_osc -  Data for CPR ring oscillator
  * @gcnt: gate count value for the oscillator
- * @quot: target value for ring oscillator
+ * @target_count: target value for ring oscillator
  */
 struct msm_cpr_osc {
 	int gcnt;
-	uint32_t quot;
+	uint32_t target_count;
 };
 
 /**
@@ -143,11 +154,9 @@ struct msm_cpr_mode {
 	int ring_osc;
 	int32_t tgt_volt_offset;
 	uint32_t step_quot;
-	uint32_t turbo_Vmax;
-	uint32_t turbo_Vmin;
-	uint32_t nom_Vmax;
-	uint32_t nom_Vmin;
-	uint32_t calibrated_uV;
+	uint32_t Vmax;
+	uint32_t Vmin;
+	uint32_t calibrated_mV;
 };
 
 /**
@@ -171,14 +180,8 @@ struct msm_cpr_config {
 	uint32_t dn_threshold;
 	uint32_t up_margin;
 	uint32_t dn_margin;
-	uint32_t max_nom_freq;
-	uint32_t max_freq;
-	uint32_t max_quot;
-	bool disable_cpr;
-	uint32_t step_size;
-	uint32_t (*get_quot)(uint32_t max_quot, uint32_t max_freq,
-				uint32_t new_freq);
-	void (*clk_enable)(void);
+	uint32_t nom_freq_limit;
+	struct msm_cpr_vp_data *vp_data;
 };
 
 /**

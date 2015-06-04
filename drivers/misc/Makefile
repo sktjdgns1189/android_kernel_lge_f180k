@@ -19,6 +19,7 @@ obj-$(CONFIG_PHANTOM)		+= phantom.o
 obj-$(CONFIG_SENSORS_BH1780)	+= bh1780gli.o
 obj-$(CONFIG_SENSORS_BH1770)	+= bh1770glc.o
 obj-$(CONFIG_SENSORS_APDS990X)	+= apds990x.o
+obj-$(CONFIG_ANDROID_PMEM)	+= pmem.o
 obj-$(CONFIG_SGI_IOC4)		+= ioc4.o
 obj-$(CONFIG_ENCLOSURE_SERVICES) += enclosure.o
 obj-$(CONFIG_KGDB_TESTS)	+= kgdbts.o
@@ -53,20 +54,37 @@ obj-$(CONFIG_ALTERA_STAPL)	+=altera-stapl/
 obj-$(CONFIG_MAX8997_MUIC)	+= max8997-muic.o
 obj-$(CONFIG_WL127X_RFKILL)	+= wl127x-rfkill.o
 obj-$(CONFIG_SENSORS_AK8975)	+= akm8975.o
+obj-$(CONFIG_WL127X_RFKILL)	+= wl127x-rfkill.o
+obj-$(CONFIG_APANIC)		+= apanic.o
+obj-$(CONFIG_SENSORS_AK8975)	+= akm8975.o
 obj-$(CONFIG_TSIF) += msm_tsif.o
 msm_tsif-objs := tsif.o
 obj-$(CONFIG_TSIF_CHRDEV) += tsif_chrdev.o
 obj-$(CONFIG_TSPP) += tspp.o
-obj-$(CONFIG_CI_BRIDGE_SPI) += ci-bridge-spi.o
 obj-$(CONFIG_HAPTIC_ISA1200)		+= isa1200.o
 obj-$(CONFIG_PMIC8058_PWM) += pmic8058-pwm.o
+ifeq ($(CONFIG_MACH_APQ8064_AWIFI),y)
+obj-$(CONFIG_PMIC8XXX_VIBRATOR) += pm8xxx-vibrator_lge.o
+else ifeq ($(CONFIG_MACH_APQ8064_ALTEV),y)
+obj-$(CONFIG_PMIC8XXX_VIBRATOR) += pm8xxx-vibrator_lge.o
+else
 obj-$(CONFIG_PMIC8XXX_VIBRATOR) += pm8xxx-vibrator.o
+endif
 obj-$(CONFIG_PMIC8XXX_NFC) += pm8xxx-nfc.o
 obj-$(CONFIG_PMIC8XXX_UPL) += pm8xxx-upl.o
+obj-$(CONFIG_ANDROID_VIBRATOR)	+= android_vibrator.o
+obj-$(CONFIG_ANDROID_SW_IRRC)	+= android_irrc.o
 obj-$(CONFIG_MSM_MEMORY_LOW_POWER_MODE_SUSPEND_DEEP_POWER_DOWN) \
 	+= msm_migrate_pages.o
 obj-$(CONFIG_PMIC8058_XOADC) += pmic8058-xoadc.o
 obj-$(CONFIG_QSEECOM) += qseecom.o
 obj-$(CONFIG_QFP_FUSE) += qfp_fuse.o
-obj-$(CONFIG_TI_DRV2667) += ti_drv2667.o
-obj-$(CONFIG_QPNP_MISC) += qpnp-misc.o
+ifeq ($(CONFIG_MACH_APQ8064_AWIFI),y)
+obj-y += tspdrv_awifi/
+else ifeq ($(CONFIG_MACH_APQ8064_ALTEV),y)
+obj-y += tspdrv_awifi/
+else
+obj-y += tspdrv/
+endif
+obj-$(CONFIG_BU52031NVX) += pm8xxx-cradle.o
+obj-$(CONFIG_SLIMPORT_ANX7808)	+= slimport_anx7808/

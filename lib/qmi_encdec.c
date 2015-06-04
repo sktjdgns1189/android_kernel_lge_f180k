@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2013, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -25,134 +25,14 @@
 #define TLV_LEN_SIZE sizeof(uint16_t)
 #define TLV_TYPE_SIZE sizeof(uint8_t)
 
-#ifdef CONFIG_QMI_ENCDEC_DEBUG
-
-#define qmi_encdec_dump(prefix_str, buf, buf_len) do { \
-	const u8 *ptr = buf; \
-	int i, linelen, remaining = buf_len; \
-	int rowsize = 16, groupsize = 1; \
-	unsigned char linebuf[256]; \
-	for (i = 0; i < buf_len; i += rowsize) { \
-		linelen = min(remaining, rowsize); \
-		remaining -= linelen; \
-		hex_dump_to_buffer(ptr + i, linelen, rowsize, groupsize, \
-				   linebuf, sizeof(linebuf), false); \
-		pr_debug("%s: %s\n", prefix_str, linebuf); \
-	} \
-} while (0)
-
-#define QMI_ENCODE_LOG_MSG(buf, buf_len) do { \
-	qmi_encdec_dump("QMI_ENCODE_MSG", buf, buf_len); \
-} while (0)
-
-#define QMI_DECODE_LOG_MSG(buf, buf_len) do { \
-	qmi_encdec_dump("QMI_DECODE_MSG", buf, buf_len); \
-} while (0)
-
-#define QMI_ENCODE_LOG_ELEM(level, elem_len, elem_size, buf) do { \
-	pr_debug("QMI_ENCODE_ELEM lvl: %d, len: %d, size: %d\n", \
-		 level, elem_len, elem_size); \
-	qmi_encdec_dump("QMI_ENCODE_ELEM", buf, (elem_len * elem_size)); \
-} while (0)
-
-#define QMI_DECODE_LOG_ELEM(level, elem_len, elem_size, buf) do { \
-	pr_debug("QMI_DECODE_ELEM lvl: %d, len: %d, size: %d\n", \
-		 level, elem_len, elem_size); \
-	qmi_encdec_dump("QMI_DECODE_ELEM", buf, (elem_len * elem_size)); \
-} while (0)
-
-#define QMI_ENCODE_LOG_TLV(tlv_type, tlv_len) do { \
-	pr_debug("QMI_ENCODE_TLV type: %d, len: %d\n", tlv_type, tlv_len); \
-} while (0)
-
-#define QMI_DECODE_LOG_TLV(tlv_type, tlv_len) do { \
-	pr_debug("QMI_DECODE_TLV type: %d, len: %d\n", tlv_type, tlv_len); \
-} while (0)
-
-#else
-
-#define QMI_ENCODE_LOG_MSG(buf, buf_len) { }
-#define QMI_DECODE_LOG_MSG(buf, buf_len) { }
-#define QMI_ENCODE_LOG_ELEM(level, elem_len, elem_size, buf) { }
-#define QMI_DECODE_LOG_ELEM(level, elem_len, elem_size, buf) { }
-#define QMI_ENCODE_LOG_TLV(tlv_type, tlv_len) { }
-#define QMI_DECODE_LOG_TLV(tlv_type, tlv_len) { }
-
-#endif
-
 static int _qmi_kernel_encode(struct elem_info *ei_array,
 			      void *out_buf, void *in_c_struct,
-			      uint32_t out_buf_len, int enc_level);
+			      int enc_level);
 
 static int _qmi_kernel_decode(struct elem_info *ei_array,
 			      void *out_c_struct,
 			      void *in_buf, uint32_t in_buf_len,
 			      int dec_level);
-
-/**
- * qmi_calc_max_msg_len() - Calculate the maximum length of a QMI message
- * @ei_array: Struct info array describing the structure.
- * @level: Level to identify the depth of the nested structures.
- *
- * @return: expected maximum length of the QMI message or 0 on failure.
- */
-static int qmi_calc_max_msg_len(struct elem_info *ei_array,
-				int level)
-{
-	int max_msg_len = 0;
-	struct elem_info *temp_ei;
-
-	if (!ei_array)
-		return max_msg_len;
-
-	for (temp_ei = ei_array; temp_ei->data_type != QMI_EOTI; temp_ei++) {
-		/* Flag to identify the optional element is not encoded */
-		if (temp_ei->data_type == QMI_OPT_FLAG)
-			continue;
-
-		if (temp_ei->data_type == QMI_DATA_LEN) {
-			max_msg_len += (temp_ei->elem_size == sizeof(uint8_t) ?
-					sizeof(uint8_t) : sizeof(uint16_t));
-			continue;
-		} else if (temp_ei->data_type == QMI_STRUCT) {
-			max_msg_len += qmi_calc_max_msg_len(temp_ei->ei_array,
-							    (level + 1));
-		} else {
-			max_msg_len += (temp_ei->elem_len * temp_ei->elem_size);
-		}
-
-		/*
-		 * Type & Length info. not prepended for elements in the
-		 * nested structure.
-		 */
-		if (level == 1)
-			max_msg_len += (TLV_TYPE_SIZE + TLV_LEN_SIZE);
-	}
-	return max_msg_len;
-}
-
-/**
- * qmi_verify_max_msg_len() - Verify the maximum length of a QMI message
- * @desc: Pointer to structure descriptor.
- *
- * @return: true if the maximum message length embedded in structure
- *          descriptor matches the calculated value, else false.
- */
-bool qmi_verify_max_msg_len(struct msg_desc *desc)
-{
-	int calc_max_msg_len;
-
-	if (!desc)
-		return false;
-
-	calc_max_msg_len = qmi_calc_max_msg_len(desc->ei_array, 1);
-	if (calc_max_msg_len != desc->max_msg_len) {
-		pr_err("%s: Calc. len %d != Passed len %d\n",
-			__func__, calc_max_msg_len, desc->max_msg_len);
-		return false;
-	}
-	return true;
-}
 
 /**
  * qmi_kernel_encode() - Encode to QMI message wire format
@@ -168,7 +48,6 @@ int qmi_kernel_encode(struct msg_desc *desc,
 		      void *in_c_struct)
 {
 	int enc_level = 1;
-	int ret, calc_max_msg_len;
 
 	if (!desc || !desc->ei_array)
 		return -EINVAL;
@@ -179,14 +58,8 @@ int qmi_kernel_encode(struct msg_desc *desc,
 	if (desc->max_msg_len < out_buf_len)
 		return -ETOOSMALL;
 
-	ret = _qmi_kernel_encode(desc->ei_array, out_buf,
-				 in_c_struct, out_buf_len, enc_level);
-	if (ret == -ETOOSMALL) {
-		calc_max_msg_len = qmi_calc_max_msg_len(desc->ei_array, 1);
-		pr_err("%s: Calc. len %d != Out buf len %d\n",
-			__func__, calc_max_msg_len, out_buf_len);
-	}
-	return ret;
+	return _qmi_kernel_encode(desc->ei_array, out_buf,
+				  in_c_struct, enc_level);
 }
 EXPORT_SYMBOL(qmi_kernel_encode);
 
@@ -224,7 +97,6 @@ static int qmi_encode_basic_elem(void *buf_dst, void *buf_src,
  * @buf_dst: Buffer to store the encoded information.
  * @buf_src: Buffer containing the elements to be encoded.
  * @elem_len: Number of elements, in the buf_src, to be encoded.
- * @out_buf_len: Available space in the encode buffer.
  * @enc_level: Depth of the nested structure from the main structure.
  *
  * @return: Mumber of bytes of encoded information, on success.
@@ -238,16 +110,14 @@ static int qmi_encode_basic_elem(void *buf_dst, void *buf_src,
  */
 static int qmi_encode_struct_elem(struct elem_info *ei_array,
 				  void *buf_dst, void *buf_src,
-				  uint32_t elem_len, uint32_t out_buf_len,
-				  int enc_level)
+				  uint32_t elem_len, int enc_level)
 {
 	int i, rc, encoded_bytes = 0;
 	struct elem_info *temp_ei = ei_array;
 
 	for (i = 0; i < elem_len; i++) {
-		rc = _qmi_kernel_encode(temp_ei->ei_array, buf_dst, buf_src,
-					(out_buf_len - encoded_bytes),
-					enc_level);
+		rc = _qmi_kernel_encode(temp_ei->ei_array,
+					buf_dst, buf_src, enc_level);
 		if (rc < 0) {
 			pr_err("%s: STRUCT Encode failure\n", __func__);
 			return rc;
@@ -289,7 +159,6 @@ static struct elem_info *skip_to_next_elem(struct elem_info *ei_array)
  * @ei_array: Struct info array describing the structure to be encoded.
  * @out_buf: Buffer to hold the encoded QMI message.
  * @in_c_struct: Pointer to the C structure to be encoded.
- * @out_buf_len: Available space in the encode buffer.
  * @enc_level: Encode level to indicate the depth of the nested structure,
  *             within the main structure, being encoded.
  *
@@ -298,7 +167,7 @@ static struct elem_info *skip_to_next_elem(struct elem_info *ei_array)
  */
 static int _qmi_kernel_encode(struct elem_info *ei_array,
 			      void *out_buf, void *in_c_struct,
-			      uint32_t out_buf_len, int enc_level)
+			      int enc_level)
 {
 	struct elem_info *temp_ei = ei_array;
 	uint8_t opt_flag_value = 0;
@@ -344,13 +213,6 @@ static int _qmi_kernel_encode(struct elem_info *ei_array,
 			memcpy(&data_len_value, buf_src, temp_ei->elem_size);
 			data_len_sz = temp_ei->elem_size == sizeof(uint8_t) ?
 					sizeof(uint8_t) : sizeof(uint16_t);
-			/* Check to avoid out of range buffer access */
-			if ((data_len_sz + encoded_bytes + TLV_LEN_SIZE +
-			    TLV_TYPE_SIZE) > out_buf_len) {
-				pr_err("%s: Too Small Buffer @DATA_LEN\n",
-					__func__);
-				return -ETOOSMALL;
-			}
 			rc = qmi_encode_basic_elem(buf_dst, &data_len_value,
 						   1, data_len_sz);
 			if (data_len_value) {
@@ -368,26 +230,15 @@ static int _qmi_kernel_encode(struct elem_info *ei_array,
 		case QMI_UNSIGNED_8_BYTE:
 		case QMI_SIGNED_2_BYTE_ENUM:
 		case QMI_SIGNED_4_BYTE_ENUM:
-			/* Check to avoid out of range buffer access */
-			if (((data_len_value * temp_ei->elem_size) +
-			    encoded_bytes + TLV_LEN_SIZE + TLV_TYPE_SIZE) >
-			    out_buf_len) {
-				pr_err("%s: Too Small Buffer @data_type:%d\n",
-					__func__, temp_ei->data_type);
-				return -ETOOSMALL;
-			}
 			rc = qmi_encode_basic_elem(buf_dst, buf_src,
 				data_len_value, temp_ei->elem_size);
-			QMI_ENCODE_LOG_ELEM(enc_level, data_len_value,
-				temp_ei->elem_size, buf_src);
 			UPDATE_ENCODE_VARIABLES(temp_ei, buf_dst,
 				encoded_bytes, tlv_len, encode_tlv, rc);
 			break;
 
 		case QMI_STRUCT:
 			rc = qmi_encode_struct_elem(temp_ei, buf_dst, buf_src,
-				data_len_value, (out_buf_len - encoded_bytes),
-				(enc_level + 1));
+				data_len_value, (enc_level + 1));
 			if (rc < 0)
 				return rc;
 			UPDATE_ENCODE_VARIABLES(temp_ei, buf_dst,
@@ -402,7 +253,6 @@ static int _qmi_kernel_encode(struct elem_info *ei_array,
 
 		if (encode_tlv && enc_level == 1) {
 			QMI_ENCDEC_ENCODE_TLV(tlv_type, tlv_len, tlv_pointer);
-			QMI_ENCODE_LOG_TLV(tlv_type, tlv_len);
 			encoded_bytes += (TLV_TYPE_SIZE + TLV_LEN_SIZE);
 			tlv_pointer = buf_dst;
 			tlv_len = 0;
@@ -410,7 +260,6 @@ static int _qmi_kernel_encode(struct elem_info *ei_array,
 			encode_tlv = 0;
 		}
 	}
-	QMI_ENCODE_LOG_MSG(out_buf, encoded_bytes);
 	return encoded_bytes;
 }
 
@@ -570,13 +419,11 @@ static int _qmi_kernel_decode(struct elem_info *ei_array,
 	void *buf_src = in_buf;
 	int rc;
 
-	QMI_DECODE_LOG_MSG(in_buf, in_buf_len);
 	while (decoded_bytes < in_buf_len) {
 		if (dec_level == 1) {
 			tlv_pointer = buf_src;
 			QMI_ENCDEC_DECODE_TLV(&tlv_type,
 					      &tlv_len, tlv_pointer);
-			QMI_DECODE_LOG_TLV(tlv_type, tlv_len);
 			buf_src += (TLV_TYPE_SIZE + TLV_LEN_SIZE);
 			decoded_bytes += (TLV_TYPE_SIZE + TLV_LEN_SIZE);
 			temp_ei = find_ei(ei_array, tlv_type);
@@ -623,8 +470,6 @@ static int _qmi_kernel_decode(struct elem_info *ei_array,
 		case QMI_SIGNED_4_BYTE_ENUM:
 			rc = qmi_decode_basic_elem(buf_dst, buf_src,
 				data_len_value, temp_ei->elem_size);
-			QMI_DECODE_LOG_ELEM(dec_level, data_len_value,
-				temp_ei->elem_size, buf_dst);
 			UPDATE_DECODE_VARIABLES(buf_src, decoded_bytes, rc);
 			break;
 

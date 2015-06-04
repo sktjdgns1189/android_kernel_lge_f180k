@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2013, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -61,29 +61,6 @@ static const char *client_names[OCMEM_CLIENT_MAX] = {
 	"lp_audio",
 	"sensors",
 	"other_os",
-};
-
-/* Must be in sync with enum ocmem_zstat_item */
-static const char *zstat_names[NR_OCMEM_ZSTAT_ITEMS] = {
-	"Allocation requests",
-	"Synchronous allocations",
-	"Ranged allocations",
-	"Asynchronous allocations",
-	"Allocation failures",
-	"Allocations grown",
-	"Allocations freed",
-	"Allocations shrunk",
-	"OCMEM maps",
-	"Map failures",
-	"OCMEM unmaps",
-	"Unmap failures",
-	"Transfers to OCMEM",
-	"Transfers to DDR",
-	"Transfer failures",
-	"Evictions",
-	"Restorations",
-	"Dump requests",
-	"Dump completed",
 };
 
 struct ocmem_quota_table {
@@ -156,23 +133,6 @@ inline int zone_active(int id)
 		return z->active == true ? 1 : 0;
 	else
 		return 0;
-}
-
-inline void inc_ocmem_stat(struct ocmem_zone *z,
-				enum ocmem_zstat_item item)
-{
-	if (!z)
-		return;
-	atomic_long_inc(&z->z_stat[item]);
-}
-
-inline unsigned long get_ocmem_stat(struct ocmem_zone *z,
-				enum ocmem_zstat_item item)
-{
-	if (!z)
-		return 0;
-	else
-		return atomic_long_read(&z->z_stat[item]);
 }
 
 static struct ocmem_plat_data *parse_static_config(struct platform_device *pdev)
@@ -359,13 +319,9 @@ void ocmem_disable_core_clock(void)
 int ocmem_enable_iface_clock(void)
 {
 	int ret;
-
-	if (!ocmem_pdata->iface_clk)
-		return 0;
-
 	ret = clk_prepare_enable(ocmem_pdata->iface_clk);
 	if (ret) {
-		pr_err("ocmem: Failed to disable iface clock\n");
+		pr_err("ocmem: Failed to disable branch clock\n");
 		return ret;
 	}
 	pr_debug("ocmem: Enabled iface clock\n");
@@ -374,15 +330,11 @@ int ocmem_enable_iface_clock(void)
 
 void ocmem_disable_iface_clock(void)
 {
-	if (!ocmem_pdata->iface_clk)
-		return;
-
 	clk_disable_unprepare(ocmem_pdata->iface_clk);
 	pr_debug("ocmem: Disabled iface clock\n");
 }
 
-static struct ocmem_plat_data * __devinit parse_dt_config
-						(struct platform_device *pdev)
+static struct ocmem_plat_data *parse_dt_config(struct platform_device *pdev)
 {
 	struct device   *dev = &pdev->dev;
 	struct device_node *node = pdev->dev.of_node;
@@ -397,7 +349,6 @@ static struct ocmem_plat_data * __devinit parse_dt_config
 	struct resource *ocmem_mem_io;
 	unsigned nr_parts = 0;
 	unsigned nr_regions = 0;
-	unsigned nr_macros = 0;
 
 	pdata = devm_kzalloc(dev, sizeof(struct ocmem_plat_data),
 			GFP_KERNEL);
@@ -499,16 +450,6 @@ static struct ocmem_plat_data * __devinit parse_dt_config
 		return NULL;
 	}
 
-	if (of_property_read_u32(node, "qcom,ocmem-num-macros",
-							 &nr_macros)) {
-		dev_err(dev, "No OCMEM macros specified\n");
-	}
-
-	if (nr_macros == 0) {
-		dev_err(dev, "No hardware macros found\n");
-		return NULL;
-	}
-
 	/* Figure out the number of partititons */
 	nr_parts = of_ocmem_parse_regions(dev, &parts);
 	if (nr_parts <= 0) {
@@ -525,95 +466,12 @@ static struct ocmem_plat_data * __devinit parse_dt_config
 	pdata->nr_parts = nr_parts;
 	pdata->parts = parts;
 	pdata->nr_regions = nr_regions;
-	pdata->nr_macros = nr_macros;
 	pdata->ocmem_irq = ocmem_irq->start;
 	pdata->dm_irq = dm_irq->start;
 	return pdata;
 pdata_error:
 	return NULL;
 }
-
-static int ocmem_zones_show(struct seq_file *f, void *dummy)
-{
-	unsigned i = 0;
-	for (i = OCMEM_GRAPHICS; i < OCMEM_CLIENT_MAX; i++) {
-		struct ocmem_zone *z = get_zone(i);
-		if (z && z->active == true)
-			seq_printf(f, "zone %s\t:0x%08lx - 0x%08lx (%4ld KB)\n",
-				get_name(z->owner), z->z_start, z->z_end - 1,
-				(z->z_end - z->z_start)/SZ_1K);
-	}
-	return 0;
-}
-
-static int ocmem_zones_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, ocmem_zones_show, inode->i_private);
-}
-
-static const struct file_operations zones_show_fops = {
-	.open = ocmem_zones_open,
-	.read = seq_read,
-	.llseek = seq_lseek,
-	.release = seq_release,
-};
-
-static int ocmem_stats_show(struct seq_file *f, void *dummy)
-{
-	unsigned i = 0;
-	unsigned j = 0;
-	for (i = OCMEM_GRAPHICS; i < OCMEM_CLIENT_MAX; i++) {
-		struct ocmem_zone *z = get_zone(i);
-		if (z && z->active == true) {
-			seq_printf(f, "zone %s:\n", get_name(z->owner));
-			for (j = 0 ; j < ARRAY_SIZE(zstat_names); j++) {
-				seq_printf(f, "\t %s: %lu\n", zstat_names[j],
-					get_ocmem_stat(z, j));
-			}
-		}
-	}
-	return 0;
-}
-
-static int ocmem_stats_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, ocmem_stats_show, inode->i_private);
-}
-
-static const struct file_operations stats_show_fops = {
-	.open = ocmem_stats_open,
-	.read = seq_read,
-	.llseek = seq_lseek,
-	.release = seq_release,
-};
-
-static int ocmem_timing_show(struct seq_file *f, void *dummy)
-{
-	unsigned i = 0;
-	for (i = OCMEM_GRAPHICS; i < OCMEM_CLIENT_MAX; i++) {
-		struct ocmem_zone *z = get_zone(i);
-		if (z && z->active == true)
-			seq_printf(f, "zone %s\t: alloc_delay:[max:%d, min:%d, total:%llu,cnt:%lu] free_delay:[max:%d, min:%d, total:%llu, cnt:%lu]\n",
-				get_name(z->owner), z->max_alloc_time,
-				z->min_alloc_time, z->total_alloc_time,
-				get_ocmem_stat(z, 1), z->max_free_time,
-				z->min_free_time, z->total_free_time,
-				get_ocmem_stat(z, 6));
-	}
-	return 0;
-}
-
-static int ocmem_timing_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, ocmem_timing_show, inode->i_private);
-}
-
-static const struct file_operations timing_show_fops = {
-	.open = ocmem_timing_open,
-	.read = seq_read,
-	.llseek = seq_lseek,
-	.release = seq_release,
-};
 
 static int ocmem_zone_init(struct platform_device *pdev)
 {
@@ -684,13 +542,6 @@ static int ocmem_zone_init(struct platform_device *pdev)
 		zone->max_regions = 0;
 		INIT_LIST_HEAD(&zone->req_list);
 		zone->z_ops = z_ops;
-		zone->max_alloc_time = 0;
-		zone->min_alloc_time = 0xFFFFFFFF;
-		zone->total_alloc_time = 0;
-		zone->max_free_time = 0;
-		zone->min_free_time = 0xFFFFFFFF;
-		zone->total_free_time = 0;
-
 		if (part->p_tail) {
 			z_ops->allocate = allocate_tail;
 			z_ops->free = free_tail;
@@ -698,8 +549,6 @@ static int ocmem_zone_init(struct platform_device *pdev)
 			z_ops->allocate = allocate_head;
 			z_ops->free = free_head;
 		}
-		/* zap the counters */
-		memset(zone->z_stat, 0 , sizeof(zone->z_stat));
 		zone->active = true;
 		active_zones++;
 
@@ -708,25 +557,7 @@ static int ocmem_zone_init(struct platform_device *pdev)
 
 		pr_info(" zone %s\t: 0x%08lx - 0x%08lx (%4ld KB)\n",
 				client_names[part->id], zone->z_start,
-				zone->z_end - 1, part->p_size/SZ_1K);
-	}
-
-	if (!debugfs_create_file("zones", S_IRUGO, pdata->debug_node,
-					NULL, &zones_show_fops)) {
-		dev_err(dev, "Unable to create debugfs node for zones\n");
-		return -EBUSY;
-	}
-
-	if (!debugfs_create_file("stats", S_IRUGO, pdata->debug_node,
-					NULL, &stats_show_fops)) {
-		dev_err(dev, "Unable to create debugfs node for stats\n");
-		return -EBUSY;
-	}
-
-	if (!debugfs_create_file("timing", S_IRUGO, pdata->debug_node,
-					NULL, &timing_show_fops)) {
-		dev_err(dev, "Unable to create debugfs node for timing\n");
-		return -EBUSY;
+				zone->z_end, part->p_size/SZ_1K);
 	}
 
 	dev_dbg(dev, "Total active zones = %d\n", active_zones);
@@ -734,7 +565,7 @@ static int ocmem_zone_init(struct platform_device *pdev)
 }
 
 /* Enable the ocmem graphics mpU as a workaround */
-#ifdef CONFIG_MSM_OCMEM_NONSECURE
+/* This will be programmed by TZ after TZ support is integrated */
 static int ocmem_init_gfx_mpu(struct platform_device *pdev)
 {
 	int rc;
@@ -755,40 +586,12 @@ static int ocmem_init_gfx_mpu(struct platform_device *pdev)
 	ocmem_disable_core_clock();
 	return 0;
 }
-#else
-static int ocmem_init_gfx_mpu(struct platform_device *pdev)
-{
-	return 0;
-}
-#endif /* CONFIG_MSM_OCMEM_NONSECURE */
-
-static int __devinit ocmem_debugfs_init(struct platform_device *pdev)
-{
-	struct dentry *debug_dir = NULL;
-	struct ocmem_plat_data *pdata = platform_get_drvdata(pdev);
-
-	debug_dir = debugfs_create_dir("ocmem", NULL);
-	if (!debug_dir || IS_ERR(debug_dir)) {
-		pr_err("ocmem: Unable to create debugfs root\n");
-		return PTR_ERR(debug_dir);
-	}
-
-	pdata->debug_node =  debug_dir;
-	return 0;
-}
-
-static void __devexit ocmem_debugfs_exit(struct platform_device *pdev)
-{
-	struct ocmem_plat_data *pdata = platform_get_drvdata(pdev);
-	debugfs_remove_recursive(pdata->debug_node);
-}
 
 static int __devinit msm_ocmem_probe(struct platform_device *pdev)
 {
 	struct device   *dev = &pdev->dev;
 	struct clk *ocmem_core_clk = NULL;
 	struct clk *ocmem_iface_clk = NULL;
-	int rc;
 
 	if (!pdev->dev.of_node) {
 		dev_info(dev, "Missing Configuration in Device Tree\n");
@@ -822,33 +625,15 @@ static int __devinit msm_ocmem_probe(struct platform_device *pdev)
 
 	ocmem_iface_clk = devm_clk_get(dev, "iface_clk");
 
-	if (IS_ERR_OR_NULL(ocmem_iface_clk))
-		ocmem_iface_clk = NULL;
-
+	if (IS_ERR(ocmem_iface_clk)) {
+		dev_err(dev, "Unable to get the memory interface clock\n");
+		return PTR_ERR(ocmem_core_clk);
+	};
 
 	ocmem_pdata->core_clk = ocmem_core_clk;
 	ocmem_pdata->iface_clk = ocmem_iface_clk;
 
 	platform_set_drvdata(pdev, ocmem_pdata);
-
-	rc = ocmem_enable_core_clock();
-	if (rc < 0)
-		goto core_clk_fail;
-
-	rc = ocmem_enable_iface_clock();
-	if (rc < 0)
-		goto iface_clk_fail;
-
-	/* Parameter to be updated based on TZ */
-	/* Allow the OCMEM CSR to be programmed */
-	if (ocmem_restore_sec_program(OCMEM_SECURE_DEV_ID))
-		return -EBUSY;
-
-	ocmem_disable_iface_clock();
-	ocmem_disable_core_clock();
-
-	if (ocmem_debugfs_init(pdev))
-		dev_err(dev, "ocmem: No debugfs node available\n");
 
 	if (ocmem_core_init(pdev))
 		return -EBUSY;
@@ -859,7 +644,7 @@ static int __devinit msm_ocmem_probe(struct platform_device *pdev)
 	if (ocmem_notifier_init())
 		return -EBUSY;
 
-	if (ocmem_sched_init(pdev))
+	if (ocmem_sched_init())
 		return -EBUSY;
 
 	if (ocmem_rdm_init(pdev))
@@ -872,17 +657,10 @@ static int __devinit msm_ocmem_probe(struct platform_device *pdev)
 
 	dev_dbg(dev, "initialized successfully\n");
 	return 0;
-
-iface_clk_fail:
-	ocmem_disable_core_clock();
-core_clk_fail:
-	pr_err("ocmem: Failed to turn on core clk\n");
-	return rc;
 }
 
 static int __devexit msm_ocmem_remove(struct platform_device *pdev)
 {
-	ocmem_debugfs_exit(pdev);
 	return 0;
 }
 

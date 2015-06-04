@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2013, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -14,7 +14,8 @@
 #include <linux/device.h>
 #include <linux/usb/msm_hsusb.h>
 #include <mach/usb_bam.h>
-#include "gadget_chips.h"
+
+#define BAM_CONNC_IDX 0 /* USB bam connection index */
 
 struct  usb_qdss_bam_connect_info {
 	u32 usb_bam_pipe_idx;
@@ -59,50 +60,42 @@ int send_sps_req(struct usb_ep *data_ep)
 	return 0;
 }
 
-static int set_qdss_data_connection(struct usb_gadget *gadget,
-	struct usb_ep *data_ep, u8 data_addr, int enable)
+int set_qdss_data_connection(struct usb_ep *data_ep, u8 data_addr, int enable)
 {
 	int res = 0;
-	u8 idx;
 
 	pr_debug("set_qdss_data_connection\n");
 
-	/* There is only one qdss pipe, so the pipe number can be set to 0 */
-	idx = usb_bam_get_connection_idx(gadget->name, QDSS_P_BAM,
-		PEER_PERIPHERAL_TO_USB, 0);
-	if (idx < 0) {
-		pr_err("%s: usb_bam_get_connection_idx failed\n", __func__);
-		return idx;
-	}
-
 	if (enable) {
-		res = usb_bam_connect(idx, &(bam_info.usb_bam_pipe_idx));
+		res = usb_bam_connect(BAM_CONNC_IDX, NULL,
+			&(bam_info.usb_bam_pipe_idx));
+		if (res) {
+			pr_err("usb_bam_connection error\n");
+			return res;
+		}
+
 		bam_info.data_fifo =
 			kzalloc(sizeof(struct sps_mem_buffer *), GFP_KERNEL);
 		if (!bam_info.data_fifo) {
 			pr_err("qdss_data_connection: memory alloc failed\n");
 			return -ENOMEM;
 		}
-		usb_bam_set_qdss_core(gadget->name);
-		get_bam2bam_connection_info(idx,
-			&bam_info.usb_bam_handle,
+		get_bam2bam_connection_info(BAM_CONNC_IDX,
+			PEER_PERIPHERAL_TO_USB, &bam_info.usb_bam_handle,
 			&bam_info.usb_bam_pipe_idx, &bam_info.peer_pipe_idx,
 			NULL, bam_info.data_fifo);
 
-		if (gadget_is_dwc3(gadget))
-			msm_data_fifo_config(data_ep,
-					     bam_info.data_fifo->phys_base,
-					     bam_info.data_fifo->size,
-					     bam_info.usb_bam_pipe_idx);
+		msm_data_fifo_config(data_ep, bam_info.data_fifo->phys_base,
+			bam_info.data_fifo->size, bam_info.usb_bam_pipe_idx);
 	} else {
 		kfree(bam_info.data_fifo);
-		res = usb_bam_disconnect_pipe(idx);
+		res = usb_bam_disconnect_pipe(BAM_CONNC_IDX);
 		if (res) {
 			pr_err("usb_bam_disconnection error\n");
 			return res;
 		}
-	}
 
+	}
 	return res;
 }
 
@@ -136,7 +129,7 @@ int uninit_data(struct usb_ep *ep)
 	if (gadget_is_dwc3(gadget)) {
 		res = msm_ep_unconfig(ep);
 		if (res)
-			pr_err("msm_ep_unconfig failed\n");
+			pr_err("msm_ep_config failed\n");
 	}
 
 	return res;

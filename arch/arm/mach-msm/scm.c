@@ -1,4 +1,4 @@
-/* Copyright (c) 2010-2013, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2010-2012, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -114,7 +114,6 @@ static inline void *scm_get_response_buffer(const struct scm_response *rsp)
 
 static int scm_remap_error(int err)
 {
-	pr_err("scm_call failed with error code %d\n", err);
 	switch (err) {
 	case SCM_ERROR:
 		return -EIO;
@@ -159,12 +158,11 @@ static int __scm_call(const struct scm_command *cmd)
 	u32 cmd_addr = virt_to_phys(cmd);
 
 	/*
-	 * Flush the command buffer so that the secure world sees
-	 * the correct data.
+	 * Flush the entire cache here so callers don't have to remember
+	 * to flush the cache when passing physical addresses to the secure
+	 * side in the buffer.
 	 */
-	__cpuc_flush_dcache_area((void *)cmd, cmd->len);
-	outer_flush_range(cmd_addr, cmd_addr + cmd->len);
-
+	flush_cache_all();
 	ret = smc(cmd_addr);
 	if (ret < 0)
 		ret = scm_remap_error(ret);
@@ -172,16 +170,12 @@ static int __scm_call(const struct scm_command *cmd)
 	return ret;
 }
 
+static u32 cacheline_size;
+
 static void scm_inv_range(unsigned long start, unsigned long end)
 {
-	u32 cacheline_size, ctr;
-
-	asm volatile("mrc p15, 0, %0, c0, c0, 1" : "=r" (ctr));
-	cacheline_size = 4 << ((ctr >> 16) & 0xf);
-
 	start = round_down(start, cacheline_size);
 	end = round_up(end, cacheline_size);
-	outer_inv_range(start, end);
 	while (start < end) {
 		asm ("mcr p15, 0, %0, c7, c6, 1" : : "r" (start)
 		     : "memory");
@@ -389,43 +383,6 @@ s32 scm_call_atomic2(u32 svc, u32 cmd, u32 arg1, u32 arg2)
 }
 EXPORT_SYMBOL(scm_call_atomic2);
 
-/**
- * scm_call_atomic3() - Send an atomic SCM command with three arguments
- * @svc_id: service identifier
- * @cmd_id: command identifier
- * @arg1: first argument
- * @arg2: second argument
- * @arg3: third argument
- *
- * This shall only be used with commands that are guaranteed to be
- * uninterruptable, atomic and SMP safe.
- */
-s32 scm_call_atomic3(u32 svc, u32 cmd, u32 arg1, u32 arg2, u32 arg3)
-{
-	int context_id;
-	register u32 r0 asm("r0") = SCM_ATOMIC(svc, cmd, 3);
-	register u32 r1 asm("r1") = (u32)&context_id;
-	register u32 r2 asm("r2") = arg1;
-	register u32 r3 asm("r3") = arg2;
-	register u32 r4 asm("r4") = arg3;
-
-	asm volatile(
-		__asmeq("%0", "r0")
-		__asmeq("%1", "r0")
-		__asmeq("%2", "r1")
-		__asmeq("%3", "r2")
-		__asmeq("%4", "r3")
-		__asmeq("%5", "r4")
-#ifdef REQUIRES_SEC
-			".arch_extension sec\n"
-#endif
-		"smc	#0	@ switch to secure world\n"
-		: "=r" (r0)
-		: "r" (r0), "r" (r1), "r" (r2), "r" (r3), "r" (r4));
-	return r0;
-}
-EXPORT_SYMBOL(scm_call_atomic3);
-
 s32 scm_call_atomic4_3(u32 svc, u32 cmd, u32 arg1, u32 arg2,
 		u32 arg3, u32 arg4, u32 *ret1, u32 *ret2)
 {
@@ -526,3 +483,13 @@ int scm_get_feat_version(u32 feat)
 }
 EXPORT_SYMBOL(scm_get_feat_version);
 
+static int scm_init(void)
+{
+	u32 ctr;
+
+	asm volatile("mrc p15, 0, %0, c0, c0, 1" : "=r" (ctr));
+	cacheline_size =  4 << ((ctr >> 16) & 0xf);
+
+	return 0;
+}
+early_initcall(scm_init);

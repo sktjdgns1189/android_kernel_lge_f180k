@@ -29,6 +29,7 @@
 #include <linux/miscdevice.h>
 #include <linux/list.h>
 #include <linux/wait.h>
+#include <linux/poll.h>
 
 #define DRIVER_DESC	"USB host ks bridge driver"
 #define DRIVER_VERSION	"1.0"
@@ -77,8 +78,8 @@ struct ks_bridge {
 	struct list_head	to_mdm_list;
 	struct list_head	to_ks_list;
 	wait_queue_head_t	ks_wait_q;
-	wait_queue_head_t	pending_urb_wait;
 	struct miscdevice	fs_dev;
+	wait_queue_head_t	pending_urb_wait;
 	atomic_t		tx_pending_cnt;
 	atomic_t		rx_pending_cnt;
 
@@ -377,6 +378,27 @@ static int ksb_fs_open(struct inode *ip, struct file *fp)
 	return 0;
 }
 
+static unsigned int ksb_fs_poll(struct file *file, poll_table *wait)
+{
+	struct ks_bridge	*ksb = file->private_data;
+	unsigned long		flags;
+	int			ret = 0;
+
+	if (!test_bit(USB_DEV_CONNECTED, &ksb->flags))
+		return POLLERR;
+
+	poll_wait(file, &ksb->ks_wait_q, wait);
+	if (!test_bit(USB_DEV_CONNECTED, &ksb->flags))
+		return POLLERR;
+
+	spin_lock_irqsave(&ksb->lock, flags);
+	if (!list_empty(&ksb->to_ks_list))
+		ret = POLLIN | POLLRDNORM;
+	spin_unlock_irqrestore(&ksb->lock, flags);
+
+	return ret;
+}
+
 static int ksb_fs_release(struct inode *ip, struct file *fp)
 {
 	struct ks_bridge	*ksb = fp->private_data;
@@ -396,6 +418,7 @@ static const struct file_operations ksb_fops = {
 	.write = ksb_fs_write,
 	.open = ksb_fs_open,
 	.release = ksb_fs_release,
+	.poll = ksb_fs_poll,
 };
 
 static struct miscdevice ksb_fboot_dev[] = {
@@ -441,6 +464,8 @@ static const struct usb_device_id ksb_usb_ids[] = {
 	.driver_info = (unsigned long)&ksb_efs_hsic_dev, },
 	{ USB_DEVICE(0x5c6, 0x9079),
 	.driver_info = (unsigned long)&ksb_efs_usb_dev, },
+	{ USB_DEVICE(0x5c6, 0x908A),
+	.driver_info = (unsigned long)&ksb_efs_hsic_dev, },
 
 	{} /* terminating entry */
 };
@@ -473,7 +498,7 @@ submit_one_urb(struct ks_bridge *ksb, gfp_t flags, struct data_pkt *pkt)
 	}
 
 	atomic_inc(&ksb->rx_pending_cnt);
-	ret = usb_submit_urb(urb, flags);
+	ret = usb_submit_urb(urb, GFP_ATOMIC);
 	if (ret) {
 		dev_err(&ksb->udev->dev, "in urb submission failed");
 		usb_unanchor_urb(urb);
@@ -529,6 +554,7 @@ add_to_list:
 	pkt->len = urb->actual_length;
 	list_add_tail(&pkt->list, &ksb->to_ks_list);
 	spin_unlock(&ksb->lock);
+
 	/* wake up read thread */
 	if (wakeup)
 		wake_up(&ksb->ks_wait_q);
@@ -550,8 +576,7 @@ static void ksb_start_rx_work(struct work_struct *w)
 	ret = usb_autopm_get_interface(ksb->ifc);
 	if (ret < 0) {
 		if (ret != -EAGAIN && ret != -EACCES) {
-			pr_err_ratelimited("%s: autopm_get failed:%d",
-					ksb->fs_dev.name, ret);
+			pr_err_ratelimited("autopm_get failed:%d", ret);
 			return;
 		}
 		put = false;
@@ -559,7 +584,7 @@ static void ksb_start_rx_work(struct work_struct *w)
 	for (i = 0; i < NO_RX_REQS; i++) {
 
 		if (!test_bit(USB_DEV_CONNECTED, &ksb->flags))
-			break;
+			return;
 
 		pkt = ksb_alloc_data_pkt(MAX_DATA_PKT_SIZE, GFP_KERNEL, ksb);
 		if (IS_ERR(pkt)) {
@@ -607,11 +632,11 @@ ksb_usb_probe(struct usb_interface *ifc, const struct usb_device_id *id)
 	struct usb_endpoint_descriptor	*ep_desc;
 	int				i;
 	struct ks_bridge		*ksb;
-	unsigned long			flags;
-	struct data_pkt			*pkt;
 	struct miscdevice		*mdev, *fbdev;
 	struct usb_device		*udev;
 	unsigned int			bus_id;
+	unsigned long			flags;
+	struct data_pkt			*pkt;
 
 	ifc_num = ifc->cur_altsetting->desc.bInterfaceNumber;
 
@@ -635,9 +660,13 @@ ksb_usb_probe(struct usb_interface *ifc, const struct usb_device_id *id)
 	case 0x9048:
 	case 0x904C:
 	case 0x9075:
+	case 0x908A:
 		if (ifc_num != 2)
 			return -ENODEV;
 		ksb = __ksb[EFS_HSIC_BRIDGE_INDEX];
+#ifdef CONFIG_USB_G_LGE_ANDROID
+        ifc->needs_remote_wakeup = 1;
+#endif
 		break;
 	case 0x9079:
 		if (ifc_num != 2)
@@ -704,10 +733,14 @@ ksb_usb_probe(struct usb_interface *ifc, const struct usb_device_id *id)
 	ksb->fs_dev = *mdev;
 	misc_register(&ksb->fs_dev);
 
+#ifdef CONFIG_USB_G_LGE_ANDROID
+    usb_enable_autosuspend(ksb->udev);
+#else
 	if (device_can_wakeup(&ksb->udev->dev)) {
 		ifc->needs_remote_wakeup = 1;
 		usb_enable_autosuspend(ksb->udev);
 	}
+#endif
 
 	dev_dbg(&udev->dev, "usb dev connected");
 

@@ -29,8 +29,7 @@ enum hdmi_supported_sample_rates {
 	HDMI_SAMPLE_RATE_88_2KHZ,
 	HDMI_SAMPLE_RATE_96KHZ,
 	HDMI_SAMPLE_RATE_176_4KHZ,
-	HDMI_SAMPLE_RATE_192KHZ,
-	HDMI_SAMPLE_RATE_MAX
+	HDMI_SAMPLE_RATE_192KHZ
 };
 
 int hdmi_audio_enable(bool on , u32 fifo_water_mark);

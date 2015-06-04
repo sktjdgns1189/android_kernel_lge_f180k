@@ -1,4 +1,4 @@
-/* Copyright (c) 2011-2014, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2011-2013, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -37,6 +37,10 @@ module_param_array(rmnet_dev_names, charp, NULL, S_IRUGO | S_IWUSR);
 #define ACM_CTRL_CTS		BIT(1)
 #define ACM_CTRL_RI		BIT(2)
 #define ACM_CTRL_CD		BIT(3)
+
+/* polling interval for Interrupt ep */
+#define HS_INTERVAL		7
+#define FS_LS_INTERVAL		3
 
 /*echo modem_wait > /sys/class/hsicctl/hsicctlx/modem_wait*/
 static ssize_t modem_wait_store(struct device *d, struct device_attribute *attr,
@@ -263,6 +267,13 @@ static void notification_available_cb(struct urb *urb)
 	switch (ctrl->bNotificationType) {
 	case USB_CDC_NOTIFY_RESPONSE_AVAILABLE:
 		dev->resp_avail_cnt++;
+		/* If MUX is not enabled, wakeup up the open process
+		* upon first notify response available.
+		*/
+		if (!test_bit(RMNET_CTRL_DEV_READY, &dev->status)) {
+		 set_bit(RMNET_CTRL_DEV_READY, &dev->status);
+		 wake_up(&dev->open_wait_queue);
+		}
 
 		/* If MUX is not enabled, wakeup up the open process
 		 * upon first notify response available.
@@ -937,7 +948,9 @@ int rmnet_usb_ctrl_probe(struct usb_interface *intf,
 		dev->intf->cur_altsetting->desc.bInterfaceNumber;
 	dev->in_ctlreq->wLength = cpu_to_le16(DEFAULT_READ_URB_LENGTH);
 
-	interval = int_in->desc.bInterval;
+	interval = max((int)int_in->desc.bInterval,
+			(udev->speed == USB_SPEED_HIGH) ? HS_INTERVAL
+							: FS_LS_INTERVAL);
 
 	usb_fill_int_urb(dev->inturb, udev,
 			 dev->int_pipe,
@@ -965,6 +978,9 @@ int rmnet_usb_ctrl_probe(struct usb_interface *intf,
 		set_bit(RMNET_CTRL_DEV_READY, &dev->status);
 		wake_up(&dev->open_wait_queue);
 	}
+
+//	set_bit(RMNET_CTRL_DEV_READY, &dev->status);
+//	wake_up(&dev->open_wait_queue);
 
 	return 0;
 }

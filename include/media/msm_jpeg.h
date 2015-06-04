@@ -1,3 +1,16 @@
+/* Copyright (c) 2012, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ */
+
 #ifndef __LINUX_MSM_JPEG_H
 #define __LINUX_MSM_JPEG_H
 
@@ -55,9 +68,6 @@
 #define MSM_JPEG_IOCTL_TEST_DUMP_REGION \
 	_IOW(MSM_JPEG_IOCTL_MAGIC, 15, unsigned long)
 
-#define MSM_JPEG_IOCTL_SET_CLK_RATE \
-	_IOW(MSM_JPEG_IOCTL_MAGIC, 16, unsigned long)
-
 #define MSM_JPEG_MODE_REALTIME_ENCODE 0
 #define MSM_JPEG_MODE_OFFLINE_ENCODE 1
 #define MSM_JPEG_MODE_REALTIME_ROTATION 2
@@ -88,8 +98,6 @@ struct msm_jpeg_buf {
 
 	uint32_t num_of_mcu_rows;
 	uint32_t offset;
-	uint32_t pln2_off;
-	uint32_t pln2_len;
 };
 
 #define MSM_JPEG_HW_CMD_TYPE_READ      0

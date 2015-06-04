@@ -1,4 +1,4 @@
-/* Copyright (c) 2010-2013, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2010-2012, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -26,9 +26,8 @@
 #include <linux/sysfs.h>
 #include <linux/device.h>
 #include <linux/slab.h>
-#include <sound/apr_audio-v2.h>
 #include <asm/mach-types.h>
-#include <mach/subsystem_restart.h>
+#include <mach/peripheral-loader.h>
 #include <mach/msm_smd.h>
 #include <mach/qdsp6v2/apr.h>
 #include <mach/qdsp6v2/apr_tal.h>
@@ -56,7 +55,7 @@ struct apr_svc_table {
 	int client_id;
 };
 
-static const struct apr_svc_table svc_tbl_qdsp6[] = {
+static const struct apr_svc_table svc_tbl_audio[] = {
 	{
 		.name = "AFE",
 		.idx = 0,
@@ -109,17 +108,6 @@ static const struct apr_svc_table svc_tbl_qdsp6[] = {
 		.name = "USM",
 		.idx = 8,
 		.id = APR_SVC_USM,
-		.client_id = APR_CLIENT_AUDIO,
-	},
-	{
-		.name = "VIDC",
-		.idx = 9,
-		.id = APR_SVC_VIDC,
-	},
-	{
-		.name = "LSM",
-		.idx = 10,
-		.id = APR_SVC_LSM,
 		.client_id = APR_CLIENT_AUDIO,
 	},
 };
@@ -235,7 +223,7 @@ int apr_load_adsp_image(void)
 	int rc = 0;
 	mutex_lock(&q6.lock);
 	if (apr_get_q6_state() == APR_SUBSYS_UP) {
-		q6.pil = subsystem_get("adsp");
+		q6.pil = pil_get("q6");
 		if (IS_ERR(q6.pil)) {
 			rc = PTR_ERR(q6.pil);
 			pr_err("APR: Unable to load q6 image, error:%d\n", rc);
@@ -243,11 +231,8 @@ int apr_load_adsp_image(void)
 			apr_set_q6_state(APR_SUBSYS_LOADED);
 			pr_debug("APR: Image is loaded, stated\n");
 		}
-	} else if (apr_get_q6_state() == APR_SUBSYS_LOADED) {
-		pr_debug("APR: q6 image already loaded\n");
-	} else {
+	} else
 		pr_debug("APR: cannot load state %d\n", apr_get_q6_state());
-	}
 	mutex_unlock(&q6.lock);
 	return rc;
 }
@@ -285,6 +270,7 @@ int apr_send_pkt(void *handle, uint32_t *buf)
 		pr_err("apr: Still Modem is not Up\n");
 		return -ENETRESET;
 	}
+
 
 	spin_lock_irqsave(&svc->w_lock, flags);
 	dest_id = svc->dest_id;
@@ -396,10 +382,7 @@ void apr_cb_func(void *buf, int len, void *priv)
 		    svc == APR_SVC_ADM || svc == APR_SVC_ADSP_CORE ||
 		    svc == APR_SVC_USM ||
 		    svc == APR_SVC_TEST_CLIENT || svc == APR_SVC_ADSP_MVM ||
-		    svc == APR_SVC_ADSP_CVS || svc == APR_SVC_ADSP_CVP ||
-		    svc == APR_SVC_LSM)
-			clnt = APR_CLIENT_AUDIO;
-		else if (svc == APR_SVC_VIDC)
+		    svc == APR_SVC_ADSP_CVS || svc == APR_SVC_ADSP_CVP)
 			clnt = APR_CLIENT_AUDIO;
 		else {
 			pr_err("APR: Wrong svc :%d\n", svc);
@@ -436,7 +419,7 @@ void apr_cb_func(void *buf, int len, void *priv)
 	if (data.payload_size > 0)
 		data.payload = (char *)hdr + hdr_size;
 
-	temp_port = ((data.dest_port >> 8) * 8) + (data.dest_port & 0xFF);
+	temp_port = ((data.src_port >> 8) * 8) + (data.src_port & 0xFF);
 	pr_debug("port = %d t_port = %d\n", data.src_port, temp_port);
 	if (c_svc->port_cnt && c_svc->port_fn[temp_port])
 		c_svc->port_fn[temp_port](&data,  c_svc->port_priv[temp_port]);
@@ -455,8 +438,8 @@ int apr_get_svc(const char *svc_name, int dest_id, int *client_id,
 	int ret = 0;
 
 	if (dest_id == APR_DEST_QDSP6) {
-		tbl = (struct apr_svc_table *)&svc_tbl_qdsp6;
-		size = ARRAY_SIZE(svc_tbl_qdsp6);
+		tbl = (struct apr_svc_table *)&svc_tbl_audio;
+		size = ARRAY_SIZE(svc_tbl_audio);
 	} else {
 		tbl = (struct apr_svc_table *)&svc_tbl_voice;
 		size = ARRAY_SIZE(svc_tbl_voice);
@@ -675,8 +658,8 @@ static int lpass_notifier_cb(struct notifier_block *this, unsigned long code,
 		pr_debug("L-notify: Bootup started\n");
 		break;
 	case SUBSYS_AFTER_POWERUP:
-		if (apr_cmpxchg_q6_state(APR_SUBSYS_DOWN,
-				APR_SUBSYS_LOADED) == APR_SUBSYS_DOWN)
+		if (apr_cmpxchg_q6_state(APR_SUBSYS_DOWN, APR_SUBSYS_UP) ==
+					     APR_SUBSYS_DOWN)
 			wake_up(&dsp_wait);
 		pr_debug("L-Notify: Bootup Completed\n");
 		break;
@@ -720,7 +703,7 @@ static int __init apr_late_init(void)
 	init_waitqueue_head(&dsp_wait);
 	init_waitqueue_head(&modem_wait);
 	subsys_notif_register_notifier("modem", &mnb);
-	subsys_notif_register_notifier(apr_get_lpass_subsys_name(), &lnb);
+	subsys_notif_register_notifier("lpass", &lnb);
 	return ret;
 }
 late_initcall(apr_late_init);

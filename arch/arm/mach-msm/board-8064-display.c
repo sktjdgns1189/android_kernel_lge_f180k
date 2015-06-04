@@ -1,4 +1,4 @@
-/* Copyright (c) 2012, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2013, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -50,7 +50,6 @@
 #define MSM_FB_OVERLAY1_WRITEBACK_SIZE (0)
 #endif  /* CONFIG_FB_MSM_OVERLAY1_WRITEBACK */
 
-#define AVTIMER_PHYSICAL_ADDRESS 0x28009008
 
 static struct resource msm_fb_resources[] = {
 	{
@@ -248,6 +247,9 @@ static struct msm_bus_scale_pdata mdp_bus_scale_pdata = {
 static struct msm_panel_common_pdata mdp_pdata = {
 	.gpio = MDP_VSYNC_GPIO,
 	.mdp_max_clk = 266667000,
+	.mdp_max_bw = 2000000000,
+	.mdp_bw_ab_factor = 115,
+	.mdp_bw_ib_factor = 150,
 	.mdp_bus_scale_table = &mdp_bus_scale_pdata,
 	.mdp_rev = MDP_REV_44,
 #ifdef CONFIG_MSM_MULTIMEDIA_USE_ION
@@ -256,7 +258,6 @@ static struct msm_panel_common_pdata mdp_pdata = {
 	.mem_hid = MEMTYPE_EBI1,
 #endif
 	.mdp_iommu_split_domain = 1,
-	.avtimer_phy = AVTIMER_PHYSICAL_ADDRESS,
 };
 
 void __init apq8064_mdp_writeback(struct memtype_reserve* reserve_table)
@@ -268,6 +269,9 @@ void __init apq8064_mdp_writeback(struct memtype_reserve* reserve_table)
 		mdp_pdata.ov0_wb_size;
 	reserve_table[mdp_pdata.mem_hid].size +=
 		mdp_pdata.ov1_wb_size;
+
+	pr_info("mem_map: mdp reserved with size 0x%lx in pool\n",
+			mdp_pdata.ov0_wb_size + mdp_pdata.ov1_wb_size);
 #endif
 }
 
@@ -687,9 +691,11 @@ static struct platform_device lvds_frc_panel_device = {
 	}
 };
 
-static int dsi2lvds_gpio[2] = {
+static int dsi2lvds_gpio[4] = {
 	LPM_CHANNEL,/* Backlight PWM-ID=0 for PMIC-GPIO#24 */
-	0x1F08 /* DSI2LVDS Bridge GPIO Output, mask=0x1f, out=0x08 */
+	0x1F08, /* DSI2LVDS Bridge GPIO Output, mask=0x1f, out=0x08 */
+	-1,
+	-1
 };
 static struct msm_panel_common_pdata mipi_dsi2lvds_pdata = {
 	.gpio_num = dsi2lvds_gpio,
@@ -818,13 +824,12 @@ static int hdmi_core_power(int on, int show)
 		return 0;
 
 	/* TBD: PM8921 regulator instead of 8901 */
-	if (!reg_ext_3p3v &&
-		(!(machine_is_mpq8064_hrd() || machine_is_mpq8064_dtv()))) {
+	if (!reg_ext_3p3v) {
 		reg_ext_3p3v = regulator_get(&hdmi_msm_device.dev,
-						"hdmi_mux_vdd");
+					     "hdmi_mux_vdd");
 		if (IS_ERR_OR_NULL(reg_ext_3p3v)) {
 			pr_err("could not get reg_ext_3p3v, rc = %ld\n",
-				PTR_ERR(reg_ext_3p3v));
+			       PTR_ERR(reg_ext_3p3v));
 			reg_ext_3p3v = NULL;
 			return -ENODEV;
 		}
@@ -832,7 +837,7 @@ static int hdmi_core_power(int on, int show)
 
 	if (!reg_8921_lvs7) {
 		reg_8921_lvs7 = regulator_get(&hdmi_msm_device.dev,
-						"hdmi_vdda");
+					      "hdmi_vdda");
 		if (IS_ERR(reg_8921_lvs7)) {
 			pr_err("could not get reg_8921_lvs7, rc = %ld\n",
 				PTR_ERR(reg_8921_lvs7));
@@ -842,7 +847,7 @@ static int hdmi_core_power(int on, int show)
 	}
 	if (!reg_8921_s4) {
 		reg_8921_s4 = regulator_get(&hdmi_msm_device.dev,
-						"hdmi_lvl_tsl");
+					    "hdmi_lvl_tsl");
 		if (IS_ERR(reg_8921_s4)) {
 			pr_err("could not get reg_8921_s4, rc = %ld\n",
 				PTR_ERR(reg_8921_s4));
@@ -861,22 +866,17 @@ static int hdmi_core_power(int on, int show)
 		 * Configure 3P3V_BOOST_EN as GPIO, 8mA drive strength,
 		 * pull none, out-high
 		 */
-		if (!(machine_is_mpq8064_hrd() || machine_is_mpq8064_dtv())) {
-			rc = regulator_set_optimum_mode(reg_ext_3p3v, 290000);
-			if (rc < 0) {
-				pr_err("set_optimum_mode ext_3p3v failed," \
-					"rc=%d\n", rc);
-				return -EINVAL;
-			}
-
-			rc = regulator_enable(reg_ext_3p3v);
-			if (rc) {
-				pr_err("enable reg_ext_3p3v failed, rc=%d\n",
-					rc);
-				return rc;
-			}
+		rc = regulator_set_optimum_mode(reg_ext_3p3v, 290000);
+		if (rc < 0) {
+			pr_err("set_optimum_mode ext_3p3v failed, rc=%d\n", rc);
+			return -EINVAL;
 		}
 
+		rc = regulator_enable(reg_ext_3p3v);
+		if (rc) {
+			pr_err("enable reg_ext_3p3v failed, rc=%d\n", rc);
+			return rc;
+		}
 		rc = regulator_enable(reg_8921_lvs7);
 		if (rc) {
 			pr_err("'%s' regulator enable failed, rc=%d\n",
@@ -891,15 +891,11 @@ static int hdmi_core_power(int on, int show)
 		}
 		pr_debug("%s(on): success\n", __func__);
 	} else {
-		if (!(machine_is_mpq8064_hrd() || machine_is_mpq8064_dtv())) {
-			rc = regulator_disable(reg_ext_3p3v);
-			if (rc) {
-				pr_err("disable reg_ext_3p3v failed, rc=%d\n",
-					rc);
-				return -ENODEV;
-			}
+		rc = regulator_disable(reg_ext_3p3v);
+		if (rc) {
+			pr_err("disable reg_ext_3p3v failed, rc=%d\n", rc);
+			return -ENODEV;
 		}
-
 		rc = regulator_disable(reg_8921_lvs7);
 		if (rc) {
 			pr_err("disable reg_8921_l23 failed, rc=%d\n", rc);
@@ -920,8 +916,7 @@ static int hdmi_core_power(int on, int show)
 error2:
 	regulator_disable(reg_8921_lvs7);
 error1:
-	if (!(machine_is_mpq8064_hrd() || machine_is_mpq8064_dtv()))
-		regulator_disable(reg_ext_3p3v);
+	regulator_disable(reg_ext_3p3v);
 	return rc;
 }
 

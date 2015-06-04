@@ -28,8 +28,8 @@
 #include <linux/wakelock.h>
 #include <linux/kfifo.h>
 #include <linux/of.h>
-#include <linux/srcu.h>
 #include <mach/msm_ipc_logging.h>
+#include <linux/srcu.h>
 #include <mach/sps.h>
 #include <mach/bam_dmux.h>
 #include <mach/msm_smsm.h>
@@ -174,9 +174,10 @@ struct bam_ch_info {
 
 #define A2_NUM_PIPES		6
 #define A2_SUMMING_THRESHOLD	4096
+#define A2_DEFAULT_DESCRIPTORS	32
 #define A2_PHYS_BASE		0x124C2000
 #define A2_PHYS_SIZE		0x2000
-#define DEFAULT_NUM_BUFFERS	32
+#define NUM_BUFFERS		32
 
 #ifndef A2_BAM_IRQ
 #define A2_BAM_IRQ -1
@@ -195,8 +196,6 @@ static struct sps_mem_buffer tx_desc_mem_buf;
 static struct sps_mem_buffer rx_desc_mem_buf;
 static struct sps_register_event tx_register_event;
 static struct sps_register_event rx_register_event;
-static bool satellite_mode;
-static uint32_t num_buffers;
 static unsigned long long last_rx_pkt_timestamp;
 
 static struct bam_ch_info bam_ch[BAM_DMUX_NUM_CHANNELS];
@@ -397,7 +396,7 @@ static void __queue_rx(gfp_t alloc_flags)
 	rx_len_cached = bam_rx_pool_len;
 	mutex_unlock(&bam_rx_pool_mutexlock);
 
-	while (bam_connection_is_active && rx_len_cached < num_buffers) {
+	while (bam_connection_is_active && rx_len_cached < NUM_BUFFERS) {
 		if (in_global_reset)
 			goto fail;
 
@@ -1246,14 +1245,14 @@ static void rx_timer_work_func(struct work_struct *work)
 				break;
 			}
 
-			buffs_used = num_buffers - buffs_unused;
+			buffs_used = NUM_BUFFERS - buffs_unused;
 
 			if (buffs_unused == 0) {
 				rx_timer_interval = MIN_POLLING_SLEEP;
 			} else {
 				if (buffs_used > 0) {
 					rx_timer_interval =
-						(2 * num_buffers *
+						(2 * NUM_BUFFERS *
 							rx_timer_interval)/
 						(3 * buffs_used);
 				} else {
@@ -1860,8 +1859,6 @@ static void disconnect_to_bam(void)
 			bam_ops->sps_disconnect_ptr(bam_rx_pipe);
 			__memzero(rx_desc_mem_buf.base, rx_desc_mem_buf.size);
 			__memzero(tx_desc_mem_buf.base, tx_desc_mem_buf.size);
-			BAM_DMUX_LOG("%s: device reset\n", __func__);
-			sps_device_reset(a2_device_handle);
 		} else {
 			ssr_skipped_disconnect = 1;
 		}
@@ -2083,9 +2080,7 @@ static int bam_init(void)
 	a2_props.options = SPS_BAM_OPT_IRQ_WAKEUP;
 	a2_props.num_pipes = A2_NUM_PIPES;
 	a2_props.summing_threshold = A2_SUMMING_THRESHOLD;
-	a2_props.constrained_logging = true;
-	a2_props.logging_number = 1;
-	if (cpu_is_msm9615() || satellite_mode)
+	if (cpu_is_msm9615())
 		a2_props.manage = SPS_BAM_MGR_DEVICE_REMOTE;
 	/* need to free on tear down */
 	ret = bam_ops->sps_register_bam_device_ptr(&a2_props, &h);
@@ -2257,7 +2252,7 @@ static int bam_init_fallback(void)
 	a2_props.options = SPS_BAM_OPT_IRQ_WAKEUP;
 	a2_props.num_pipes = A2_NUM_PIPES;
 	a2_props.summing_threshold = A2_SUMMING_THRESHOLD;
-	if (cpu_is_msm9615() || satellite_mode)
+	if (cpu_is_msm9615())
 		a2_props.manage = SPS_BAM_MGR_DEVICE_REMOTE;
 	ret = bam_ops->sps_register_bam_device_ptr(&a2_props, &h);
 	if (ret < 0) {
@@ -2435,30 +2430,14 @@ static int bam_dmux_probe(struct platform_device *pdev)
 			pr_err("%s: irq field missing\n", __func__);
 			return -ENODEV;
 		}
-		satellite_mode = of_property_read_bool(pdev->dev.of_node,
-						"qcom,satellite-mode");
-
-		rc = of_property_read_u32(pdev->dev.of_node,
-						"qcom,rx-ring-size",
-						&num_buffers);
-		if (rc) {
-			DBG("%s: falling back to num_buffs default, rc:%d\n",
-							__func__, rc);
-			num_buffers = DEFAULT_NUM_BUFFERS;
-		}
-
-		DBG("%s: base:%p size:%x irq:%d satellite:%d num_buffs:%d\n",
-							__func__,
+		DBG("%s: base:%p size:%x irq:%d\n", __func__,
 							a2_phys_base,
 							a2_phys_size,
-							a2_bam_irq,
-							satellite_mode,
-							num_buffers);
+							a2_bam_irq);
 	} else { /* fallback to default init data */
 		a2_phys_base = (void *)(A2_PHYS_BASE);
 		a2_phys_size = A2_PHYS_SIZE;
 		a2_bam_irq = A2_BAM_IRQ;
-		num_buffers = DEFAULT_NUM_BUFFERS;
 	}
 
 	xo_clk = clk_get(&pdev->dev, "xo");

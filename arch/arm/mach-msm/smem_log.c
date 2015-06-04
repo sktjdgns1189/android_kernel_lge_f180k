@@ -1,4 +1,4 @@
-/* Copyright (c) 2008-2013, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2008-2012, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -32,14 +32,10 @@
 
 #include <mach/msm_iomap.h>
 #include <mach/smem_log.h>
-#include <mach/msm_smem.h>
-
-#include <asm/arch_timer.h>
 
 #include "smd_private.h"
 #include "smd_rpc_sym.h"
 #include "modem_notifier.h"
-#include "smem_private.h"
 
 #define DEBUG
 #undef DEBUG
@@ -659,7 +655,13 @@ static inline unsigned int read_timestamp(void)
 #else
 static inline unsigned int read_timestamp(void)
 {
-	return (unsigned int)(arch_counter_get_cntpct());
+	unsigned long long val;
+
+	/* SMEM LOG uses a 32.768KHz timestamp */
+	val = sched_clock() * 32768U;
+	do_div(val, 1000000000U);
+
+	return (unsigned int)val;
 }
 #endif
 
@@ -2009,7 +2011,7 @@ static int smem_log_initialize(void)
 	return ret;
 }
 
-static int smem_module_init_notifier(struct notifier_block *this,
+static int smd_module_init_notifier(struct notifier_block *this,
 				    unsigned long code,
 				    void *_cmd)
 {
@@ -2020,12 +2022,12 @@ static int smem_module_init_notifier(struct notifier_block *this,
 }
 
 static struct notifier_block nb = {
-	.notifier_call = smem_module_init_notifier,
+	.notifier_call = smd_module_init_notifier,
 };
 
 static int __init smem_log_init(void)
 {
-	return smem_module_init_notifier_register(&nb);
+	return smd_module_init_notifier_register(&nb);
 }
 
 

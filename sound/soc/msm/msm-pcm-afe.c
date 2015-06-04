@@ -20,7 +20,7 @@
 #include <linux/platform_device.h>
 #include <linux/slab.h>
 #include <linux/dma-mapping.h>
-
+#include <linux/android_pmem.h>
 #include <sound/core.h>
 #include <sound/soc.h>
 #include <sound/soc-dapm.h>
@@ -30,11 +30,14 @@
 #include <sound/q6adm.h>
 #include <asm/dma.h>
 #include <linux/memory_alloc.h>
+#include <mach/msm_subsystem_map.h>
 #include "msm-pcm-afe.h"
 #include "msm-pcm-q6.h"
 
+
 #define MIN_PERIOD_SIZE (128 * 2)
 #define MAX_PERIOD_SIZE (128 * 2 * 2 * 6)
+
 static struct snd_pcm_hardware msm_afe_hardware = {
 	.info =			(SNDRV_PCM_INFO_MMAP |
 				SNDRV_PCM_INFO_BLOCK_TRANSFER |
@@ -48,11 +51,11 @@ static struct snd_pcm_hardware msm_afe_hardware = {
 	.rate_max =             48000,
 	.channels_min =         1,
 	.channels_max =         2,
-	.buffer_bytes_max =     MAX_PERIOD_SIZE * 32,
+	.buffer_bytes_max =     MAX_PERIOD_SIZE * 64,
 	.period_bytes_min =     MIN_PERIOD_SIZE,
 	.period_bytes_max =     MAX_PERIOD_SIZE,
-	.periods_min =          32,
-	.periods_max =          384,
+	.periods_min =          64,
+	.periods_max =          768,
 	.fifo_size =            0,
 };
 static enum hrtimer_restart afe_hrtimer_callback(struct hrtimer *hrt);

@@ -7,7 +7,7 @@
 
 #define IOCTL_GET_AVTIMER_TICK _IOR(MAJOR_NUM, 0, char *)
 /*
- * This IOCTL is used read the avtimer tick value.
+ * This IOCTL is used to read the avtimer tick value.
  * Avtimer is a 64 bit timer tick, hence the expected
  * argument is of type uint64_t
  */
@@ -16,6 +16,6 @@ struct dev_avtimer_data {
 	uint32_t avtimer_lsw_phy_addr;
 };
 int avcs_core_open(void);
-int avcs_core_disable_power_collapse(int disable);/* true or flase */
+int avcs_core_disable_power_collapse(int disable);/* true or false */
 
 #endif

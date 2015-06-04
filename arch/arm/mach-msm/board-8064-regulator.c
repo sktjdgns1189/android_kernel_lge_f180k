@@ -33,8 +33,6 @@ VREG_CONSUMERS(L2) = {
 	REGULATOR_SUPPLY("mipi_csi_vdd",	"msm_csid.2"),
 	REGULATOR_SUPPLY("lvds_pll_vdda",	"lvds.0"),
 	REGULATOR_SUPPLY("dsi1_pll_vdda",	"mipi_dsi.1"),
-	REGULATOR_SUPPLY("HRD_VDDD_CDC_D",		"tabla2x-slim"),
-	REGULATOR_SUPPLY("HRD_CDC_VDDA_A_1P2V",	"tabla2x-slim"),
 	REGULATOR_SUPPLY("dsi_pll_vdda",	"mdp.0"),
 };
 VREG_CONSUMERS(L3) = {
@@ -47,7 +45,6 @@ VREG_CONSUMERS(L4) = {
 	REGULATOR_SUPPLY("8921_l4",		NULL),
 	REGULATOR_SUPPLY("HSUSB_1p8",		"msm_otg"),
 	REGULATOR_SUPPLY("iris_vddxo",		"wcnss_wlan.0"),
-	REGULATOR_SUPPLY("bha_vddxo",		"bt_power"),
 };
 VREG_CONSUMERS(L5) = {
 	REGULATOR_SUPPLY("8921_l5",		NULL),
@@ -77,7 +74,6 @@ VREG_CONSUMERS(L9) = {
 VREG_CONSUMERS(L10) = {
 	REGULATOR_SUPPLY("8921_l10",		NULL),
 	REGULATOR_SUPPLY("iris_vddpa",		"wcnss_wlan.0"),
-	REGULATOR_SUPPLY("bha_vddpa",		"bt_power"),
 };
 VREG_CONSUMERS(L11) = {
 	REGULATOR_SUPPLY("8921_l11",		NULL),
@@ -125,6 +121,8 @@ VREG_CONSUMERS(L22) = {
 };
 VREG_CONSUMERS(L23) = {
 	REGULATOR_SUPPLY("8921_l23",		NULL),
+	REGULATOR_SUPPLY("pll_vdd",		"pil_qdsp6v4.1"),
+	REGULATOR_SUPPLY("pll_vdd",		"pil_qdsp6v4.2"),
 	REGULATOR_SUPPLY("HSUSB_1p8",		"msm_ehci_host.0"),
 	REGULATOR_SUPPLY("HSUSB_1p8",		"msm_ehci_host.1"),
 };
@@ -138,18 +136,18 @@ VREG_CONSUMERS(L25) = {
 	REGULATOR_SUPPLY("CDC_VDDA_A_1P2V",	"tabla-slim"),
 	REGULATOR_SUPPLY("VDDD_CDC_D",		"tabla2x-slim"),
 	REGULATOR_SUPPLY("CDC_VDDA_A_1P2V",	"tabla2x-slim"),
-	REGULATOR_SUPPLY("VDDD_CDC_D",		"0-000d"),
-	REGULATOR_SUPPLY("CDC_VDDA_A_1P2V",	"0-000d"),
 };
 VREG_CONSUMERS(L26) = {
 	REGULATOR_SUPPLY("8921_l26",		NULL),
-	REGULATOR_SUPPLY("core_vdd",		"pil-q6v4-lpass"),
+	REGULATOR_SUPPLY("core_vdd",		"pil_qdsp6v4.0"),
 };
 VREG_CONSUMERS(L27) = {
 	REGULATOR_SUPPLY("8921_l27",		NULL),
+	REGULATOR_SUPPLY("core_vdd",		"pil_qdsp6v4.2"),
 };
 VREG_CONSUMERS(L28) = {
 	REGULATOR_SUPPLY("8921_l28",		NULL),
+	REGULATOR_SUPPLY("core_vdd",		"pil_qdsp6v4.1"),
 };
 VREG_CONSUMERS(L29) = {
 	REGULATOR_SUPPLY("8921_l29",		NULL),
@@ -179,18 +177,12 @@ VREG_CONSUMERS(S4) = {
 	REGULATOR_SUPPLY("CDC_VDD_CP",		"tabla2x-slim"),
 	REGULATOR_SUPPLY("CDC_VDDA_TX",		"tabla2x-slim"),
 	REGULATOR_SUPPLY("CDC_VDDA_RX",		"tabla2x-slim"),
-	REGULATOR_SUPPLY("VDDIO_CDC",		"0-000d"),
-	REGULATOR_SUPPLY("CDC_VDD_CP",		"0-000d"),
-	REGULATOR_SUPPLY("CDC_VDDA_TX",		"0-000d"),
-	REGULATOR_SUPPLY("CDC_VDDA_RX",		"0-000d"),
 	REGULATOR_SUPPLY("riva_vddpx",		"wcnss_wlan.0"),
-	REGULATOR_SUPPLY("bha_vddpx",		"bt_power"),
 	REGULATOR_SUPPLY("vcc_i2c",		"3-005b"),
 	REGULATOR_SUPPLY("vcc_i2c",		"3-0024"),
 	REGULATOR_SUPPLY("vddp",		"0-0048"),
 	REGULATOR_SUPPLY("hdmi_lvl_tsl",	"hdmi_msm.0"),
 	REGULATOR_SUPPLY("vdd-io",		"spi0.2"),
-	REGULATOR_SUPPLY("sata_pmp_pwr",	"msm_sata.0"),
 };
 VREG_CONSUMERS(S5) = {
 	REGULATOR_SUPPLY("8921_s5",		NULL),
@@ -266,10 +258,6 @@ VREG_CONSUMERS(EXT_TS_SW) = {
 	REGULATOR_SUPPLY("ext_ts_sw",		NULL),
 	REGULATOR_SUPPLY("vdd_ana",		"3-005b"),
 };
-VREG_CONSUMERS(EXT_SATA_PWR) = {
-	REGULATOR_SUPPLY("ext_sata_pwr",	NULL),
-	REGULATOR_SUPPLY("sata_ext_3p3v",       "msm_sata.0"),
-};
 VREG_CONSUMERS(AVC_1P2V) = {
 	REGULATOR_SUPPLY("avc_1p2v",	NULL),
 };
@@ -334,7 +322,6 @@ VREG_CONSUMERS(L36) = {
 };
 VREG_CONSUMERS(BOOST) = {
 	REGULATOR_SUPPLY("8917_boost",		NULL),
-	REGULATOR_SUPPLY("ext_ddr3",		NULL),
 	REGULATOR_SUPPLY("vbus",		"msm_ehci_host.0"),
 	REGULATOR_SUPPLY("hdmi_mvs",		"hdmi_msm.0"),
 };
@@ -440,8 +427,7 @@ VREG_CONSUMERS(BOOST) = {
 		.pin_ctrl	= _pin_ctrl, \
 	}
 
-#define GPIO_VREG(_id, _reg_name, _gpio_label, _gpio, _supply_regulator, \
-		_active_low) \
+#define GPIO_VREG(_id, _reg_name, _gpio_label, _gpio, _supply_regulator) \
 	[GPIO_VREG_ID_##_id] = { \
 		.init_data = { \
 			.constraints = { \
@@ -455,25 +441,13 @@ VREG_CONSUMERS(BOOST) = {
 		.regulator_name = _reg_name, \
 		.gpio_label	= _gpio_label, \
 		.gpio		= _gpio, \
-		.active_low	= _active_low, \
-	}
-
-#define FIXED_VREG_INIT(_id, _supply_regulator) \
-	{ \
-		.constraints = { \
-			.valid_ops_mask	= REGULATOR_CHANGE_STATUS, \
-		}, \
-		.num_consumer_supplies	= ARRAY_SIZE(vreg_consumers_##_id), \
-		.consumer_supplies	= vreg_consumers_##_id, \
-		.supply_regulator	= _supply_regulator, \
 	}
 
 #define SAW_VREG_INIT(_id, _name, _min_uV, _max_uV) \
 	{ \
 		.constraints = { \
 			.name		= _name, \
-			.valid_ops_mask	= REGULATOR_CHANGE_VOLTAGE | \
-					  REGULATOR_CHANGE_STATUS, \
+			.valid_ops_mask	= REGULATOR_CHANGE_VOLTAGE, \
 			.min_uV		= _min_uV, \
 			.max_uV		= _max_uV, \
 		}, \
@@ -581,41 +555,25 @@ VREG_CONSUMERS(BOOST) = {
 /* GPIO regulator constraints */
 struct gpio_regulator_platform_data
 apq8064_gpio_regulator_pdata[] __devinitdata = {
-	/*        ID      vreg_name gpio_label   gpio   supply   active_low */
-	GPIO_VREG(EXT_5V, "ext_5v", "ext_5v_en",
-			PM8921_MPP_PM_TO_SYS(7), NULL, 0),
+	/*        ID      vreg_name gpio_label   gpio                  supply */
+	GPIO_VREG(EXT_5V, "ext_5v", "ext_5v_en", PM8921_MPP_PM_TO_SYS(7), NULL),
 	GPIO_VREG(EXT_3P3V, "ext_3p3v", "ext_3p3v_en",
-		  APQ8064_EXT_3P3V_REG_EN_GPIO, NULL, 0),
+		  APQ8064_EXT_3P3V_REG_EN_GPIO, NULL),
 	GPIO_VREG(EXT_TS_SW, "ext_ts_sw", "ext_ts_sw_en",
-		  PM8921_GPIO_PM_TO_SYS(23), "ext_3p3v", 0),
+		  PM8921_GPIO_PM_TO_SYS(23), "ext_3p3v"),
 	GPIO_VREG(EXT_MPP8, "ext_mpp8", "ext_mpp8_en",
-			PM8921_MPP_PM_TO_SYS(8), NULL, 0),
-	GPIO_VREG(EXT_SATA_PWR, "ext_sata_pwr", "ext_sata_pwr_en",
-			PM8921_MPP_PM_TO_SYS(4), "ext_3p3v", 1),
+			PM8921_MPP_PM_TO_SYS(8), NULL),
 };
 
 struct gpio_regulator_platform_data
 mpq8064_gpio_regulator_pdata[] __devinitdata = {
-	GPIO_VREG(AVC_1P2V, "avc_1p2v", "avc_1p2v_en",
-			SX150X_GPIO(4, 2), NULL, 0),
-	GPIO_VREG(AVC_1P8V, "avc_1p8v", "avc_1p8v_en",
-			SX150X_GPIO(4, 4), NULL, 0),
+	GPIO_VREG(AVC_1P2V, "avc_1p2v", "avc_1p2v_en", SX150X_GPIO(4, 2), NULL),
+	GPIO_VREG(AVC_1P8V, "avc_1p8v", "avc_1p8v_en", SX150X_GPIO(4, 4), NULL),
 	GPIO_VREG(AVC_2P2V, "avc_2p2v", "avc_2p2v_en",
-						 SX150X_GPIO(4, 14), NULL, 0),
-	GPIO_VREG(AVC_5V, "avc_5v", "avc_5v_en", SX150X_GPIO(4, 3), NULL, 0),
+						 SX150X_GPIO(4, 14), NULL),
+	GPIO_VREG(AVC_5V, "avc_5v", "avc_5v_en", SX150X_GPIO(4, 3), NULL),
 	GPIO_VREG(AVC_3P3V, "avc_3p3v", "avc_3p3v_en",
-					SX150X_GPIO(4, 15), "avc_5v", 0),
-};
-
-/* Fixed regulator constraints */
-static struct regulator_init_data mpq8064_3p3_regulator_init =
-	/*              ID        supply */
-	FIXED_VREG_INIT(EXT_3P3V, NULL);
-
-struct fixed_voltage_config mpq8064_3p3_regulator_pdata = {
-	.supply_name = "ext_3p3v",
-	.gpio = -EINVAL,
-	.init_data = &mpq8064_3p3_regulator_init,
+					SX150X_GPIO(4, 15), "avc_5v"),
 };
 
 /* SAW regulator constraints */
@@ -692,7 +650,7 @@ apq8064_rpm_regulator_init_data[] __devinitdata = {
 	/*	ID a_on pd ss min_uV   max_uV   supply    sys_uA init_ip */
 	RPM_LDO(L1,  1, 1, 0, 1100000, 1100000, "8921_s4",     0,  1000),
 	RPM_LDO(L2,  0, 1, 0, 1200000, 1200000, "8921_s4",     0,     0),
-	RPM_LDO(L3,  0, 1, 0, 3075000, 3075000, NULL,          0,     0),
+	RPM_LDO(L3,  0, 1, 0, 3075000, 3300000, NULL,          0,     0),
 	RPM_LDO(L4,  1, 1, 0, 1800000, 1800000, NULL,          0, 10000),
 	RPM_LDO(L5,  0, 1, 0, 2950000, 2950000, NULL,          0,     0),
 	RPM_LDO(L6,  0, 1, 0, 2950000, 2950000, NULL,          0,     0),
@@ -804,6 +762,19 @@ void __init configure_apq8064_pm8917_power_grid(void)
 			rpm_data->init_data.num_consumer_supplies
 				= ARRAY_SIZE(vreg_consumers_8917_S1);
 		}
+
+		/*
+		 * Currently min/max voltage level for LD03 was set to 3.075V.
+		 * But some Full speed USB headsets requires higher cross over
+		 * voltage. The cross over voltage is directly proportional
+		 * to the phy 3.3V rail voltage. So modified the max voltage
+		 * level of LD03 to 3.3V. But apq8064_rpm_regulator_init_data
+		 * is shared between PM8921 and PM8917, so set max_uV back to
+		 * 3.075V for PM8917.
+		 */
+		 if (rpm_data->id == RPM_VREG_ID_PM8921_L3)
+			rpm_data->init_data.constraints.max_uV = 3075000;
+
 	}
 
 	/*

@@ -1,4 +1,4 @@
-/* Copyright (c) 2011-2014, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2011-2013, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -33,7 +33,6 @@
 #include <linux/wait.h>          /* wait() macros, sleeping */
 #include <linux/tspp.h>          /* tspp functions */
 #include <linux/bitops.h>        /* BIT() macro */
-#include <linux/regulator/consumer.h>
 #include <mach/sps.h>            /* BAM stuff */
 #include <mach/gpio.h>
 #include <linux/wakelock.h>      /* Locking functions */
@@ -41,12 +40,10 @@
 #include <linux/jiffies.h>       /* Jiffies counter */
 #include <mach/dma.h>
 #include <mach/msm_tspp.h>
-#include <mach/rpm-regulator-smd.h>
 #include <linux/debugfs.h>
 #include <linux/of.h>
 #include <linux/of_gpio.h>
 #include <linux/string.h>
-#include <mach/msm_bus.h>
 
 /*
  * General defines
@@ -438,7 +435,6 @@ struct tspp_device {
 	struct list_head devlist; /* list of all devices */
 	struct platform_device *pdev;
 	void __iomem *base;
-	uint32_t tsif_bus_client;
 	unsigned int tspp_irq;
 	unsigned int bam_irq;
 	u32 bam_handle;
@@ -450,8 +446,6 @@ struct tspp_device {
 	/* clocks */
 	struct clk *tsif_pclk;
 	struct clk *tsif_ref_clk;
-	/* regulators */
-	struct regulator *tsif_vreg;
 	/* data */
 	struct tspp_pid_filter_table *filters[TSPP_FILTER_TABLES];
 	struct tspp_channel channels[TSPP_NUM_CHANNELS];
@@ -459,7 +453,6 @@ struct tspp_device {
 	struct tspp_global_performance_regs *tspp_global_performance;
 	struct tspp_pipe_context_regs *tspp_pipe_context;
 	struct tspp_pipe_performance_regs *tspp_pipe_performance;
-	bool req_irqs;
 
 	struct dentry *dent;
 	struct dentry *debugfs_regs[ARRAY_SIZE(debugfs_tspp_regs)];
@@ -618,8 +611,8 @@ static void tspp_sps_complete_tlet(unsigned long data)
 				break;
 
 			if (iovec.addr != channel->waiting->sps.phys_base)
-				pr_err("tspp: buffer mismatch %pa",
-					&channel->waiting->sps.phys_base);
+				pr_err("tspp: buffer mismatch 0x%08x",
+					channel->waiting->sps.phys_base);
 
 			complete = 1;
 			channel->waiting->state = TSPP_BUF_STATE_DATA;
@@ -769,47 +762,13 @@ static int tspp_config_gpios(struct tspp_device *device,
 /*** Clock functions ***/
 static int tspp_clock_start(struct tspp_device *device)
 {
-	int rc;
-
 	if (device == NULL) {
 		pr_err("tspp: Can't start clocks, invalid device\n");
 		return -EINVAL;
 	}
 
-	if (device->tsif_bus_client) {
-		rc = msm_bus_scale_client_update_request(
-					device->tsif_bus_client, 1);
-		if (rc) {
-			pr_err("tspp: Can't enable bus\n");
-			return -EBUSY;
-		}
-	}
-
-	if (device->tsif_vreg) {
-		rc = regulator_set_voltage(device->tsif_vreg,
-					RPM_REGULATOR_CORNER_SUPER_TURBO,
-					RPM_REGULATOR_CORNER_SUPER_TURBO);
-		if (rc) {
-			pr_err("Unable to set CX voltage.\n");
-			if (device->tsif_bus_client)
-				msm_bus_scale_client_update_request(
-					device->tsif_bus_client, 0);
-			return rc;
-		}
-	}
-
 	if (device->tsif_pclk && clk_prepare_enable(device->tsif_pclk) != 0) {
 		pr_err("tspp: Can't start pclk");
-
-		if (device->tsif_vreg) {
-			regulator_set_voltage(device->tsif_vreg,
-					RPM_REGULATOR_CORNER_NONE,
-					RPM_REGULATOR_CORNER_SUPER_TURBO);
-		}
-
-		if (device->tsif_bus_client)
-			msm_bus_scale_client_update_request(
-				device->tsif_bus_client, 0);
 		return -EBUSY;
 	}
 
@@ -817,15 +776,6 @@ static int tspp_clock_start(struct tspp_device *device)
 		clk_prepare_enable(device->tsif_ref_clk) != 0) {
 		pr_err("tspp: Can't start ref clk");
 		clk_disable_unprepare(device->tsif_pclk);
-		if (device->tsif_vreg) {
-			regulator_set_voltage(device->tsif_vreg,
-					RPM_REGULATOR_CORNER_NONE,
-					RPM_REGULATOR_CORNER_SUPER_TURBO);
-		}
-
-		if (device->tsif_bus_client)
-			msm_bus_scale_client_update_request(
-				device->tsif_bus_client, 0);
 		return -EBUSY;
 	}
 
@@ -834,8 +784,6 @@ static int tspp_clock_start(struct tspp_device *device)
 
 static void tspp_clock_stop(struct tspp_device *device)
 {
-	int rc;
-
 	if (device == NULL) {
 		pr_err("tspp: Can't stop clocks, invalid device\n");
 		return;
@@ -846,21 +794,6 @@ static void tspp_clock_stop(struct tspp_device *device)
 
 	if (device->tsif_ref_clk)
 		clk_disable_unprepare(device->tsif_ref_clk);
-
-	if (device->tsif_vreg) {
-		rc = regulator_set_voltage(device->tsif_vreg,
-					RPM_REGULATOR_CORNER_NONE,
-					RPM_REGULATOR_CORNER_SUPER_TURBO);
-		if (rc)
-			pr_err("Unable to set CX voltage.\n");
-	}
-
-	if (device->tsif_bus_client) {
-		rc = msm_bus_scale_client_update_request(
-					device->tsif_bus_client, 0);
-		if (rc)
-			pr_err("tspp: Can't disable bus\n");
-	}
 }
 
 /*** TSIF functions ***/
@@ -925,11 +858,9 @@ static int tspp_start_tsif(struct tspp_tsif_device *tsif_device)
 	}
 
 	ctl = readl_relaxed(tsif_device->base + TSIF_STS_CTL_OFF);
-	if (!(ctl & TSIF_STS_CTL_START))
-		return -EBUSY;
-
 	tsif_device->ref_count++;
-	return 0;
+
+	return (ctl & TSIF_STS_CTL_START) ? 0 : -EBUSY;
 }
 
 static void tspp_stop_tsif(struct tspp_tsif_device *tsif_device)
@@ -1064,6 +995,12 @@ static int tspp_global_reset(struct tspp_device *pdev)
 	}
 	writel_relaxed(TSPP_RST_RESET, pdev->base + TSPP_RST);
 	wmb();
+
+	/* BAM */
+	if (sps_device_reset(pdev->bam_handle) != 0) {
+		pr_err("tspp: error resetting bam");
+		return -EBUSY;
+	}
 
 	/* TSPP tables */
 	for (i = 0; i < TSPP_FILTER_TABLES; i++)
@@ -1336,57 +1273,6 @@ static void tspp_destroy_buffers(u32 channel_id, struct tspp_channel *channel)
 	}
 }
 
-static int msm_tspp_req_irqs(struct tspp_device *device)
-{
-	int rc;
-	int i;
-	int j;
-
-	rc = request_irq(device->tspp_irq, tspp_isr, IRQF_SHARED,
-		dev_name(&device->pdev->dev), device);
-	if (rc) {
-		dev_err(&device->pdev->dev,
-			"failed to request TSPP IRQ %d : %d",
-			device->tspp_irq, rc);
-		return rc;
-	}
-
-	for (i = 0; i < TSPP_TSIF_INSTANCES; i++) {
-		rc = request_irq(device->tsif[i].tsif_irq,
-			tsif_isr, IRQF_SHARED, dev_name(&device->pdev->dev),
-			&device->tsif[i]);
-		if (rc) {
-			dev_err(&device->pdev->dev,
-				"failed to request TSIF%d IRQ: %d",
-				i, rc);
-			goto failed;
-		}
-	}
-	device->req_irqs = true;
-	return 0;
-
-failed:
-	free_irq(device->tspp_irq, device);
-	for (j = 0; j < i; j++)
-		free_irq(device->tsif[j].tsif_irq, device);
-
-	return rc;
-}
-
-static inline void msm_tspp_free_irqs(struct tspp_device *device)
-{
-	int i;
-
-	for (i = 0; i < TSPP_TSIF_INSTANCES; i++) {
-		if (device->tsif[i].tsif_irq)
-			free_irq(device->tsif[i].tsif_irq,  &device->tsif[i]);
-	}
-
-	if (device->tspp_irq)
-		free_irq(device->tspp_irq, device);
-	device->req_irqs = false;
-}
-
 /*** TSPP API functions ***/
 
 /**
@@ -1403,10 +1289,8 @@ int tspp_open_stream(u32 dev, u32 channel_id,
 			struct tspp_select_source *source)
 {
 	u32 val;
-	int rc;
 	struct tspp_device *pdev;
 	struct tspp_channel *channel;
-	bool req_irqs = false;
 
 	TSPP_DEBUG("tspp_open_stream %i %i %i %i",
 		dev, channel_id, source->source, source->mode);
@@ -1433,29 +1317,16 @@ int tspp_open_stream(u32 dev, u32 channel_id,
 			source->data_inverse, source->sync_inverse,
 			source->enable_inverse);
 
-	/* Request IRQ resources on first open */
-	if (!pdev->req_irqs && (source->source == TSPP_SOURCE_TSIF0 ||
-		source->source == TSPP_SOURCE_TSIF1)) {
-		rc = msm_tspp_req_irqs(pdev);
-		if (rc) {
-			pr_err("tspp: error requesting irqs\n");
-			return rc;
-		}
-		req_irqs = true;
-	}
-
 	switch (source->source) {
 	case TSPP_SOURCE_TSIF0:
 		if (tspp_config_gpios(pdev, channel->src, 1) != 0) {
-			rc = -EBUSY;
 			pr_err("tspp: error enabling tsif0 GPIOs\n");
-			goto free_irq;
+			return -EBUSY;
 		}
 		/* make sure TSIF0 is running & enabled */
 		if (tspp_start_tsif(&pdev->tsif[0]) != 0) {
-			rc = -EBUSY;
 			pr_err("tspp: error starting tsif0");
-			goto free_irq;
+			return -EBUSY;
 		}
 		if (pdev->tsif[0].ref_count == 1) {
 			val = readl_relaxed(pdev->base + TSPP_CONTROL);
@@ -1466,15 +1337,13 @@ int tspp_open_stream(u32 dev, u32 channel_id,
 		break;
 	case TSPP_SOURCE_TSIF1:
 		if (tspp_config_gpios(pdev, channel->src, 1) != 0) {
-			rc = -EBUSY;
 			pr_err("tspp: error enabling tsif1 GPIOs\n");
-			goto free_irq;
+			return -EBUSY;
 		}
 		/* make sure TSIF1 is running & enabled */
 		if (tspp_start_tsif(&pdev->tsif[1]) != 0) {
-			rc = -EBUSY;
 			pr_err("tspp: error starting tsif1");
-			goto free_irq;
+			return -EBUSY;
 		}
 		if (pdev->tsif[1].ref_count == 1) {
 			val = readl_relaxed(pdev->base + TSPP_CONTROL);
@@ -1492,12 +1361,6 @@ int tspp_open_stream(u32 dev, u32 channel_id,
 	}
 
 	return 0;
-
-free_irq:
-	/* Free irqs only if were requested during opening of this stream */
-	if (req_irqs)
-		msm_tspp_free_irqs(pdev);
-	return rc;
 }
 EXPORT_SYMBOL(tspp_open_stream);
 
@@ -1513,7 +1376,7 @@ EXPORT_SYMBOL(tspp_open_stream);
 int tspp_close_stream(u32 dev, u32 channel_id)
 {
 	u32 val;
-	u32 prev_ref_count = 0;
+	u32 prev_ref_count;
 	struct tspp_device *pdev;
 	struct tspp_channel *channel;
 
@@ -1562,35 +1425,9 @@ int tspp_close_stream(u32 dev, u32 channel_id)
 	}
 
 	channel->src = TSPP_SOURCE_NONE;
-
-	/* Free requested interrupts to save power */
-	if ((pdev->tsif[0].ref_count + pdev->tsif[1].ref_count) == 0 &&
-		prev_ref_count)
-		msm_tspp_free_irqs(pdev);
-
 	return 0;
 }
 EXPORT_SYMBOL(tspp_close_stream);
-
-static int tspp_init_sps_device(struct tspp_device *dev)
-{
-	int ret;
-
-	ret = sps_register_bam_device(&dev->bam_props, &dev->bam_handle);
-	if (ret) {
-		pr_err("tspp: failed to register bam device, err-%d\n", ret);
-		return ret;
-	}
-
-	ret = sps_device_reset(dev->bam_handle);
-	if (ret) {
-		sps_deregister_bam_device(dev->bam_handle);
-		pr_err("tspp: error resetting bam device, err=%d\n", ret);
-		return ret;
-	}
-
-	return 0;
-}
 
 /**
  * tspp_open_channel - open a TSPP channel.
@@ -1633,16 +1470,6 @@ int tspp_open_channel(u32 dev, u32 channel_id)
 		rc = tspp_clock_start(pdev);
 		if (rc)
 			return rc;
-
-		if (pdev->bam_handle == SPS_DEV_HANDLE_INVALID) {
-			rc = tspp_init_sps_device(pdev);
-			if (rc) {
-				pr_err("tspp: failed to init sps device, err=%d\n",
-					rc);
-				tspp_clock_stop(pdev);
-				return rc;
-			}
-		}
 
 		wake_lock(&pdev->wake_lock);
 	}
@@ -1724,7 +1551,6 @@ err_connect:
 err_desc_alloc:
 	sps_free_endpoint(channel->pipe);
 err_sps_alloc:
-	channel->used = 0;
 	return rc;
 }
 EXPORT_SYMBOL(tspp_open_channel);
@@ -1814,8 +1640,6 @@ int tspp_close_channel(u32 dev, u32 channel_id)
 	dma_free_coherent(NULL, config->desc.size, config->desc.base,
 		config->desc.phys_base);
 
-	sps_free_endpoint(channel->pipe);
-
 	tspp_destroy_buffers(channel_id, channel);
 	if (channel->dma_pool) {
 		dma_pool_destroy(channel->dma_pool);
@@ -1832,9 +1656,6 @@ int tspp_close_channel(u32 dev, u32 channel_id)
 	channel->locked = NULL;
 
 	if (tspp_channels_in_use(pdev) == 0) {
-		sps_deregister_bam_device(pdev->bam_handle);
-		pdev->bam_handle = SPS_DEV_HANDLE_INVALID;
-
 		wake_unlock(&pdev->wake_lock);
 		tspp_clock_stop(pdev);
 	}
@@ -2855,7 +2676,6 @@ msm_tspp_dt_to_pdata(struct platform_device *pdev)
 	struct device_node *node = pdev->dev.of_node;
 	struct msm_tspp_platform_data *data;
 	struct msm_gpio *gpios;
-	struct property *prop;
 	int i, rc;
 	int gpio;
 	u32 gpio_func;
@@ -2879,11 +2699,6 @@ msm_tspp_dt_to_pdata(struct platform_device *pdev)
 			rc);
 		return NULL;
 	}
-
-	data->tsif_vreg_present = 0;
-	prop = of_find_property(node, "vdd_cx-supply", NULL);
-	if (prop)
-		data->tsif_vreg_present = 1;
 
 	data->num_gpios = of_gpio_count(node);
 	if (data->num_gpios == 0) {
@@ -2923,6 +2738,7 @@ static int msm_tspp_map_irqs(struct platform_device *pdev,
 				struct tspp_device *device)
 {
 	int rc;
+	int i;
 
 	/* get IRQ numbers from platform information */
 
@@ -2930,6 +2746,15 @@ static int msm_tspp_map_irqs(struct platform_device *pdev,
 	rc = platform_get_irq_byname(pdev, "TSIF_TSPP_IRQ");
 	if (rc > 0) {
 		device->tspp_irq = rc;
+		rc = request_irq(device->tspp_irq, tspp_isr, IRQF_SHARED,
+				 dev_name(&pdev->dev), device);
+		if (rc) {
+			dev_err(&pdev->dev,
+				"failed to request TSPP IRQ %d : %d",
+				device->tspp_irq, rc);
+			device->tspp_irq = 0;
+			return -EINVAL;
+		}
 	} else {
 		dev_err(&pdev->dev, "failed to get TSPP IRQ");
 		return -EINVAL;
@@ -2950,6 +2775,17 @@ static int msm_tspp_map_irqs(struct platform_device *pdev,
 	} else {
 		dev_err(&pdev->dev, "failed to get TSIF1 IRQ");
 		return -EINVAL;
+	}
+
+	for (i = 0; i < TSPP_TSIF_INSTANCES; i++) {
+		rc = request_irq(device->tsif[i].tsif_irq,
+				tsif_isr, IRQF_SHARED,
+				dev_name(&pdev->dev), &device->tsif[i]);
+		if (rc) {
+			dev_warn(&pdev->dev, "failed to request TSIF%d IRQ: %d",
+				i, rc);
+			device->tsif[i].tsif_irq = 0;
+		}
 	}
 
 	/* map BAM IRQ */
@@ -2976,7 +2812,6 @@ static int __devinit msm_tspp_probe(struct platform_device *pdev)
 	struct resource *mem_tspp;
 	struct resource *mem_bam;
 	struct tspp_channel *channel;
-	struct msm_bus_scale_pdata *tspp_bus_pdata = NULL;
 
 	if (pdev->dev.of_node) {
 		/* get information from device tree */
@@ -2988,12 +2823,9 @@ static int __devinit msm_tspp_probe(struct platform_device *pdev)
 			pdev->id = -1;
 
 		pdev->dev.platform_data = data;
-
-		tspp_bus_pdata = msm_bus_cl_get_pdata(pdev);
 	} else {
 		/* must have platform data */
 		data = pdev->dev.platform_data;
-		tspp_bus_pdata = NULL;
 	}
 	if (!data) {
 		pr_err("tspp: Platform data not available");
@@ -3020,45 +2852,12 @@ static int __devinit msm_tspp_probe(struct platform_device *pdev)
 	device->pdev = pdev;
 	platform_set_drvdata(pdev, device);
 
-	/* register bus client */
-	if (tspp_bus_pdata) {
-		device->tsif_bus_client =
-			msm_bus_scale_register_client(tspp_bus_pdata);
-		if (!device->tsif_bus_client)
-			pr_err("tspp: Unable to register bus client\n");
-	} else {
-		device->tsif_bus_client = 0;
-	}
-
-	/* map regulators */
-	if (data->tsif_vreg_present) {
-		device->tsif_vreg = devm_regulator_get(&pdev->dev, "vdd_cx");
-		if (IS_ERR(device->tsif_vreg)) {
-			rc = PTR_ERR(device->tsif_vreg);
-			device->tsif_vreg = NULL;
-			goto err_regultaor;
-		}
-
-		/* Set an initial voltage and enable the regulator */
-		rc = regulator_set_voltage(device->tsif_vreg,
-					RPM_REGULATOR_CORNER_NONE,
-					RPM_REGULATOR_CORNER_SUPER_TURBO);
-		if (rc) {
-			dev_err(&pdev->dev, "Unable to set CX voltage.\n");
-			goto err_regultaor;
-		}
-
-		rc = regulator_enable(device->tsif_vreg);
-		if (rc) {
-			dev_err(&pdev->dev, "Unable to enable CX regulator.\n");
-			goto err_regultaor;
-		}
-	}
-
 	/* map clocks */
 	if (data->tsif_pclk) {
 		device->tsif_pclk = clk_get(&pdev->dev, data->tsif_pclk);
 		if (IS_ERR(device->tsif_pclk)) {
+			pr_err("tspp: failed to get %s",
+				data->tsif_pclk);
 			rc = PTR_ERR(device->tsif_pclk);
 			device->tsif_pclk = NULL;
 			goto err_pclock;
@@ -3067,6 +2866,8 @@ static int __devinit msm_tspp_probe(struct platform_device *pdev)
 	if (data->tsif_ref_clk) {
 		device->tsif_ref_clk = clk_get(&pdev->dev, data->tsif_ref_clk);
 		if (IS_ERR(device->tsif_ref_clk)) {
+			pr_err("tspp: failed to get %s",
+				data->tsif_ref_clk);
 			rc = PTR_ERR(device->tsif_ref_clk);
 			device->tsif_ref_clk = NULL;
 			goto err_refclock;
@@ -3133,7 +2934,6 @@ static int __devinit msm_tspp_probe(struct platform_device *pdev)
 
 	if (msm_tspp_map_irqs(pdev, device))
 		goto err_irq;
-	device->req_irqs = false;
 
 	/* power management */
 	pm_runtime_set_active(&pdev->dev);
@@ -3168,7 +2968,11 @@ static int __devinit msm_tspp_probe(struct platform_device *pdev)
 		goto err_clock;
 	}
 
-	device->bam_handle = SPS_DEV_HANDLE_INVALID;
+	if (sps_register_bam_device(&device->bam_props,
+		&device->bam_handle) != 0) {
+		pr_err("tspp: failed to register bam");
+		goto err_bam;
+	}
 
 	spin_lock_init(&device->spinlock);
 	tasklet_init(&device->tlet, tspp_sps_complete_tlet,
@@ -3211,10 +3015,18 @@ err_channel:
 
 	sps_deregister_bam_device(device->bam_handle);
 err_clock:
+err_bam:
 	tspp_debugfs_exit(device);
 	for (i = 0; i < TSPP_TSIF_INSTANCES; i++)
 		tsif_debugfs_exit(&device->tsif[i]);
 err_irq:
+	for (i = 0; i < TSPP_TSIF_INSTANCES; i++) {
+		if (device->tsif[i].tsif_irq)
+			free_irq(device->tsif[i].tsif_irq,  &device->tsif[i]);
+	}
+	if (device->tspp_irq)
+		free_irq(device->tspp_irq, device);
+
 	iounmap(device->bam_props.virt_addr);
 err_map_bam:
 err_res_bam:
@@ -3233,11 +3045,6 @@ err_refclock:
 	if (device->tsif_pclk)
 		clk_put(device->tsif_pclk);
 err_pclock:
-	if (device->tsif_vreg)
-		regulator_disable(device->tsif_vreg);
-err_regultaor:
-	if (device->tsif_bus_client)
-		msm_bus_scale_unregister_client(device->tsif_bus_client);
 	kfree(device);
 
 out:
@@ -3248,6 +3055,7 @@ static int __devexit msm_tspp_remove(struct platform_device *pdev)
 {
 	struct tspp_channel *channel;
 	u32 i;
+	int rc;
 
 	struct tspp_device *device = platform_get_drvdata(pdev);
 
@@ -3259,15 +3067,21 @@ static int __devexit msm_tspp_remove(struct platform_device *pdev)
 		cdev_del(&channel->cdev);
 	}
 
-	for (i = 0; i < TSPP_TSIF_INSTANCES; i++)
-		tsif_debugfs_exit(&device->tsif[i]);
+	/* de-registering BAM device requires clocks */
+	rc = tspp_clock_start(device);
+	if (rc == 0) {
+		sps_deregister_bam_device(device->bam_handle);
+		tspp_clock_stop(device);
+	}
 
-	if (device->tsif_bus_client)
-		msm_bus_scale_unregister_client(device->tsif_bus_client);
+	for (i = 0; i < TSPP_TSIF_INSTANCES; i++) {
+		tsif_debugfs_exit(&device->tsif[i]);
+		if (device->tsif[i].tsif_irq)
+			free_irq(device->tsif[i].tsif_irq,  &device->tsif[i]);
+	}
 
 	wake_lock_destroy(&device->wake_lock);
-	if (device->req_irqs)
-		msm_tspp_free_irqs(device);
+	free_irq(device->tspp_irq, device);
 
 	iounmap(device->bam_props.virt_addr);
 	iounmap(device->base);
@@ -3279,9 +3093,6 @@ static int __devexit msm_tspp_remove(struct platform_device *pdev)
 
 	if (device->tsif_pclk)
 		clk_put(device->tsif_pclk);
-
-	if (device->tsif_vreg)
-		regulator_disable(device->tsif_vreg);
 
 	pm_runtime_disable(&pdev->dev);
 

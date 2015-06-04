@@ -93,7 +93,11 @@ static inline struct f_gser *port_to_gser(struct gserial *p)
 	return container_of(p, struct f_gser, port);
 }
 #define GS_LOG2_NOTIFY_INTERVAL		5	/* 1 << 5 == 32 msec */
+#ifdef CONFIG_USB_G_LGE_ANDROID
+#define GS_NOTIFY_MAXPACKET     16
+#else
 #define GS_NOTIFY_MAXPACKET		10	/* notification + 2 bytes */
+#endif /*                          */
 #endif
 /*-------------------------------------------------------------------------*/
 
@@ -246,7 +250,7 @@ static struct usb_ss_ep_comp_descriptor gser_ss_bulk_comp_desc = {
 
 #ifdef CONFIG_MODEM_SUPPORT
 static struct usb_endpoint_descriptor gser_ss_notify_desc  = {
-	.bLength =		USB_DT_ENDPOINT_SIZE,
+	.bLength =		sizeof gser_ss_notify_desc,
 	.bDescriptorType =	USB_DT_ENDPOINT,
 	.bEndpointAddress =	USB_DIR_IN,
 	.bmAttributes =		USB_ENDPOINT_XFER_INT,

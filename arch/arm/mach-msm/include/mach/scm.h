@@ -1,4 +1,4 @@
-/* Copyright (c) 2010-2013, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2010-2012, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -21,12 +21,9 @@
 #define SCM_SVC_SSD			0x7
 #define SCM_SVC_FUSE			0x8
 #define SCM_SVC_PWR			0x9
-#define SCM_SVC_MP			0xC
+#define SCM_SVC_CP			0xC
 #define SCM_SVC_DCVS			0xD
-#define SCM_SVC_ES			0x10
 #define SCM_SVC_TZSCHEDULER		0xFC
-
-#define SCM_FUSE_READ			0x7
 
 #define DEFINE_SCM_BUFFER(__n) \
 static char __n[PAGE_SIZE] __aligned(PAGE_SIZE);
@@ -46,7 +43,6 @@ extern int scm_call_noalloc(u32 svc_id, u32 cmd_id, const void *cmd_buf,
 
 extern s32 scm_call_atomic1(u32 svc, u32 cmd, u32 arg1);
 extern s32 scm_call_atomic2(u32 svc, u32 cmd, u32 arg1, u32 arg2);
-extern s32 scm_call_atomic3(u32 svc, u32 cmd, u32 arg1, u32 arg2, u32 arg3);
 extern s32 scm_call_atomic4_3(u32 svc, u32 cmd, u32 arg1, u32 arg2, u32 arg3,
 		u32 arg4, u32 *ret1, u32 *ret2);
 
@@ -77,12 +73,6 @@ static inline s32 scm_call_atomic1(u32 svc, u32 cmd, u32 arg1)
 }
 
 static inline s32 scm_call_atomic2(u32 svc, u32 cmd, u32 arg1, u32 arg2)
-{
-	return 0;
-}
-
-static inline s32 scm_call_atomic3(u32 svc, u32 cmd, u32 arg1, u32 arg2,
-		u32 arg3)
 {
 	return 0;
 }

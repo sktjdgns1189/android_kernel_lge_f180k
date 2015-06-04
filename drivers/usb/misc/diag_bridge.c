@@ -44,7 +44,6 @@ struct diag_bridge {
 	struct mutex		ifc_mutex;
 	struct diag_bridge_ops	*ops;
 	struct platform_device	*pdev;
-	unsigned		default_autosusp_delay;
 	int			id;
 
 	/* debugging counters */
@@ -77,12 +76,6 @@ int diag_bridge_open(int id, struct diag_bridge_ops *ops)
 
 	dev->ops = ops;
 	dev->err = 0;
-
-#ifdef CONFIG_PM_RUNTIME
-	dev->default_autosusp_delay = dev->udev->dev.power.autosuspend_delay;
-#endif
-	pm_runtime_set_autosuspend_delay(&dev->udev->dev,
-			AUTOSUSP_DELAY_WITH_USB);
 
 	kref_get(&dev->kref);
 
@@ -124,10 +117,6 @@ void diag_bridge_close(int id)
 
 	usb_kill_anchored_urbs(&dev->submitted);
 	dev->ops = 0;
-
-	pm_runtime_set_autosuspend_delay(&dev->udev->dev,
-			dev->default_autosusp_delay);
-
 	kref_put(&dev->kref, diag_bridge_delete);
 }
 EXPORT_SYMBOL(diag_bridge_close);
@@ -140,9 +129,9 @@ static void diag_bridge_read_cb(struct urb *urb)
 	dev_dbg(&dev->ifc->dev, "%s: status:%d actual:%d\n", __func__,
 			urb->status, urb->actual_length);
 
-	/* save error so that subsequent read/write returns ENODEV */
-	if (urb->status == -EPROTO)
-		dev->err = urb->status;
+        /* save error so that subsequent read/write returns ENODEV */
+        if (urb->status == -EPROTO)
+     	dev->err = urb->status;
 
 	if (cbs && cbs->read_complete_cb)
 		cbs->read_complete_cb(cbs->ctxt,
@@ -464,7 +453,12 @@ diag_bridge_probe(struct usb_interface *ifc, const struct usb_device_id *id)
 		pr_err("unable to allocate dev");
 		return -ENOMEM;
 	}
-
+	dev->pdev = platform_device_alloc("diag_bridge", devid);
+	if (!dev->pdev) {
+		pr_err("unable to allocate platform device");
+		kfree(dev);
+		return -ENOMEM;
+	}
 	__dev[devid] = dev;
 	dev->id = devid;
 
@@ -493,13 +487,7 @@ diag_bridge_probe(struct usb_interface *ifc, const struct usb_device_id *id)
 
 	usb_set_intfdata(ifc, dev);
 	diag_bridge_debugfs_init();
-	dev->pdev = platform_device_register_simple("diag_bridge", devid,
-						    NULL, 0);
-	if (IS_ERR(dev->pdev)) {
-		pr_err("unable to allocate platform device");
-		ret = PTR_ERR(dev->pdev);
-		goto error;
-	}
+	platform_device_add(dev->pdev);
 
 	dev_dbg(&dev->ifc->dev, "%s: complete\n", __func__);
 
@@ -575,6 +563,8 @@ static const struct usb_device_id diag_bridge_ids[] = {
 	.driver_info = VALID_INTERFACE_NUM | DEV_ID(0), },
 	{ USB_DEVICE(0x5c6, 0x9079),
 	.driver_info = VALID_INTERFACE_NUM | DEV_ID(1), },
+	{ USB_DEVICE(0x5c6, 0x908A),
+	.driver_info = VALID_INTERFACE_NUM | DEV_ID(0), },
 
 	{} /* terminating entry */
 };

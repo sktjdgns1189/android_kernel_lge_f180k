@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2013, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -25,7 +25,6 @@
 #include <linux/delay.h>
 #include <linux/clk.h>
 #include <linux/bitmap.h>
-#include <linux/of.h>
 #include <linux/of_coresight.h>
 #include <linux/coresight.h>
 #include <linux/coresight-stm.h>
@@ -35,10 +34,6 @@
 
 #define stm_writel(drvdata, val, off)	__raw_writel((val), drvdata->base + off)
 #define stm_readl(drvdata, off)		__raw_readl(drvdata->base + off)
-
-#define stm_data_writeb(val, addr)	__raw_writeb_no_log(val, addr)
-#define stm_data_writew(val, addr)	__raw_writew_no_log(val, addr)
-#define stm_data_writel(val, addr)	__raw_writel_no_log(val, addr)
 
 #define STM_LOCK(drvdata)						\
 do {									\
@@ -90,10 +85,8 @@ do {									\
 #define STM_USERSPACE_MAGIC1_VAL	(0xf0)
 #define STM_USERSPACE_MAGIC2_VAL	(0xf1)
 
-#define OST_TOKEN_STARTSIMPLE		(0x10)
-#define OST_TOKEN_STARTBASE		(0x30)
-#define OST_VERSION_PROP		(1)
-#define OST_VERSION_MIPI1		(16)
+#define OST_START_TOKEN			(0x30)
+#define OST_VERSION			(0x1)
 
 enum stm_pkt_type {
 	STM_PKT_TYPE_DATA	= 0x98,
@@ -140,7 +133,6 @@ struct stm_drvdata {
 	struct channel_space	chs;
 	bool			enable;
 	DECLARE_BITMAP(entities, OST_ENTITY_MAX);
-	bool			write_64bit;
 };
 
 static struct stm_drvdata *stmdrvdata;
@@ -350,7 +342,7 @@ static void stm_channel_free(uint32_t ch)
 	clear_bit(ch, drvdata->chs.bitmap);
 }
 
-static int stm_send_64bit(void *addr, const void *data, uint32_t size)
+static int stm_send(void *addr, const void *data, uint32_t size)
 {
 	uint64_t prepad = 0;
 	uint64_t postpad = 0;
@@ -384,10 +376,7 @@ static int stm_send_64bit(void *addr, const void *data, uint32_t size)
 		size -= 8;
 	}
 
-	endoff = 0;
-
 	if (size) {
-		endoff = 8 - (uint8_t)size;
 		pad = (char *)&postpad;
 
 		while (size) {
@@ -397,13 +386,12 @@ static int stm_send_64bit(void *addr, const void *data, uint32_t size)
 		*(volatile uint64_t __force *)addr = postpad;
 	}
 
-	return len + off + endoff;
+	return roundup(len + off, 8);
 }
 
-static int stm_trace_ost_header_64bit(unsigned long ch_addr, uint32_t options,
-				      uint8_t entity_id, uint8_t proto_id,
-				      const void *payload_data,
-				      uint32_t payload_size)
+static int stm_trace_ost_header(unsigned long ch_addr, uint32_t options,
+				uint8_t entity_id, uint8_t proto_id,
+				const void *payload_data, uint32_t payload_size)
 {
 	void *addr;
 	uint8_t prepad_size;
@@ -412,94 +400,14 @@ static int stm_trace_ost_header_64bit(unsigned long ch_addr, uint32_t options,
 
 	hdr = (char *)&header;
 
-	hdr[0] = OST_TOKEN_STARTBASE;
-	hdr[1] = OST_VERSION_PROP;
+	hdr[0] = OST_START_TOKEN;
+	hdr[1] = OST_VERSION;
 	hdr[2] = entity_id;
 	hdr[3] = proto_id;
 	prepad_size = (unsigned long)payload_data & 0x7;
 	*(uint32_t *)(hdr + 4) = (prepad_size << 24) | payload_size;
 
-	/* for 64bit writes, header is expected to be D32M, D32M type */
-	options |= STM_OPTION_MARKED;
-	options &= ~STM_OPTION_TIMESTAMPED;
-	addr =  (void *)(ch_addr | stm_channel_off(STM_PKT_TYPE_DATA, options));
-
-	return stm_send_64bit(addr, &header, sizeof(header));
-}
-
-static int stm_trace_data_64bit(unsigned long ch_addr, uint32_t options,
-				const void *data, uint32_t size)
-{
-	void *addr;
-
-	options &= ~STM_OPTION_TIMESTAMPED;
-	addr = (void *)(ch_addr | stm_channel_off(STM_PKT_TYPE_DATA, options));
-
-	return stm_send_64bit(addr, data, size);
-}
-
-static int stm_trace_ost_tail_64bit(unsigned long ch_addr, uint32_t options)
-{
-	void *addr;
-	uint64_t tail = 0x0;
-
-	addr = (void *)(ch_addr | stm_channel_off(STM_PKT_TYPE_FLAG, options));
-
-	return stm_send_64bit(addr, &tail, sizeof(tail));
-}
-
-static int stm_send(void *addr, const void *data, uint32_t size)
-{
-	uint32_t len = size;
-
-	if (((unsigned long)data & 0x1) && (size >= 1)) {
-		stm_data_writeb(*(uint8_t *)data, addr);
-		data++;
-		size--;
-	}
-	if (((unsigned long)data & 0x2) && (size >= 2)) {
-		stm_data_writew(*(uint16_t *)data, addr);
-		data += 2;
-		size -= 2;
-	}
-
-	/* now we are 32bit aligned */
-	while (size >= 4) {
-		stm_data_writel(*(uint32_t *)data, addr);
-		data += 4;
-		size -= 4;
-	}
-
-	if (size >= 2) {
-		stm_data_writew(*(uint16_t *)data, addr);
-		data += 2;
-		size -= 2;
-	}
-	if (size >= 1) {
-		stm_data_writeb(*(uint8_t *)data, addr);
-		data++;
-		size--;
-	}
-
-	return len;
-}
-
-static int stm_trace_ost_header(unsigned long ch_addr, uint32_t options,
-				uint8_t entity_id, uint8_t proto_id,
-				const void *payload_data, uint32_t payload_size)
-{
-	void *addr;
-	uint32_t header;
-	char *hdr;
-
-	hdr = (char *)&header;
-
-	hdr[0] = OST_TOKEN_STARTSIMPLE;
-	hdr[1] = OST_VERSION_MIPI1;
-	hdr[2] = entity_id;
-	hdr[3] = proto_id;
-
-	/* header is expected to be D32M type */
+	/* for 64bit writes, header is expected to be of the D32M, D32M */
 	options |= STM_OPTION_MARKED;
 	options &= ~STM_OPTION_TIMESTAMPED;
 	addr =  (void *)(ch_addr | stm_channel_off(STM_PKT_TYPE_DATA, options));
@@ -521,7 +429,7 @@ static int stm_trace_data(unsigned long ch_addr, uint32_t options,
 static int stm_trace_ost_tail(unsigned long ch_addr, uint32_t options)
 {
 	void *addr;
-	uint32_t tail = 0x0;
+	uint64_t tail = 0x0;
 
 	addr = (void *)(ch_addr | stm_channel_off(STM_PKT_TYPE_FLAG, options));
 
@@ -540,27 +448,15 @@ static inline int __stm_trace(uint32_t options, uint8_t entity_id,
 	ch = stm_channel_alloc(0);
 	ch_addr = (unsigned long)stm_channel_addr(drvdata, ch);
 
-	if (drvdata->write_64bit) {
-		/* send the ost header */
-		len += stm_trace_ost_header_64bit(ch_addr, options, entity_id,
-						  proto_id, data, size);
+	/* send the ost header */
+	len += stm_trace_ost_header(ch_addr, options, entity_id, proto_id, data,
+				    size);
 
-		/* send the payload data */
-		len += stm_trace_data_64bit(ch_addr, options, data, size);
+	/* send the payload data */
+	len += stm_trace_data(ch_addr, options, data, size);
 
-		/* send the ost tail */
-		len += stm_trace_ost_tail_64bit(ch_addr, options);
-	} else {
-		/* send the ost header */
-		len += stm_trace_ost_header(ch_addr, options, entity_id,
-					    proto_id, data, size);
-
-		/* send the payload data */
-		len += stm_trace_data(ch_addr, options, data, size);
-
-		/* send the ost tail */
-		len += stm_trace_ost_tail(ch_addr, options);
-	}
+	/* send the ost tail */
+	len += stm_trace_ost_tail(ch_addr, options);
 
 	/* we are done, free the channel */
 	stm_channel_free(ch);
@@ -597,7 +493,7 @@ int stm_trace(uint32_t options, uint8_t entity_id, uint8_t proto_id,
 
 	return __stm_trace(options, entity_id, proto_id, data, size);
 }
-EXPORT_SYMBOL(stm_trace);
+EXPORT_SYMBOL_GPL(stm_trace);
 
 static ssize_t stm_write(struct file *file, const char __user *data,
 			 size_t size, loff_t *ppos)
@@ -793,9 +689,6 @@ static int __devinit stm_probe(struct platform_device *pdev)
 	size_t res_size, bitmap_size;
 	struct coresight_desc *desc;
 
-	if (coresight_fuse_access_disabled())
-		return -EPERM;
-
 	if (pdev->dev.of_node) {
 		pdata = of_get_coresight_platform_data(dev, pdev->dev.of_node);
 		if (IS_ERR(pdata))
@@ -811,7 +704,7 @@ static int __devinit stm_probe(struct platform_device *pdev)
 	drvdata->dev = &pdev->dev;
 	platform_set_drvdata(pdev, drvdata);
 
-	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "stm-base");
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	if (!res)
 		return -ENODEV;
 
@@ -819,8 +712,7 @@ static int __devinit stm_probe(struct platform_device *pdev)
 	if (!drvdata->base)
 		return -ENOMEM;
 
-	res = platform_get_resource_byname(pdev, IORESOURCE_MEM,
-					   "stm-data-base");
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 1);
 	if (!res)
 		return -ENODEV;
 
@@ -851,10 +743,6 @@ static int __devinit stm_probe(struct platform_device *pdev)
 		return ret;
 
 	bitmap_fill(drvdata->entities, OST_ENTITY_MAX);
-
-	if (pdev->dev.of_node)
-		drvdata->write_64bit = of_property_read_bool(pdev->dev.of_node,
-							"qcom,write-64bit");
 
 	desc = devm_kzalloc(dev, sizeof(*desc), GFP_KERNEL);
 	if (!desc)

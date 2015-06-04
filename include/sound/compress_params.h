@@ -86,11 +86,6 @@
 #define SND_AUDIOCODEC_DTS_PASS_THROUGH      ((__u32) 0x00000012)
 #define SND_AUDIOCODEC_DTS_LBR               ((__u32) 0x00000013)
 #define SND_AUDIOCODEC_DTS_TRANSCODE_LOOPBACK ((__u32) 0x00000014)
-#define SND_AUDIOCODEC_PASS_THROUGH          ((__u32) 0x00000015)
-#define SND_AUDIOCODEC_MP2                   ((__u32) 0x00000016)
-#define SND_AUDIOCODEC_DTS_LBR_PASS_THROUGH  ((__u32) 0x00000017)
-#define SND_AUDIOCODEC_EAC3                  ((__u32) 0x00000018)
-#define SND_AUDIOCODEC_MAX  SND_AUDIOCODEC_EAC3
 
 /*
  * Profile and modes are listed with bit masks. This allows for a
@@ -336,24 +331,13 @@ struct snd_enc_generic {
 	__u32 bw;	/* encoder bandwidth */
 	__s32 reserved[15];
 };
-struct snd_dec_dts {
-	__u32 modelIdLength;
-	__u8 *modelId;
-};
-struct snd_dec_ddp {
-	__u32 params_length;
-	__u8 *params;
-	__u32 params_id[18];
-	__u32 params_value[18];
-};
+
 union snd_codec_options {
 	struct snd_enc_wma wma;
 	struct snd_enc_vorbis vorbis;
 	struct snd_enc_real real;
 	struct snd_enc_flac flac;
 	struct snd_enc_generic generic;
-	struct snd_dec_dts dts;
-	struct snd_dec_ddp ddp;
 };
 
 /** struct snd_codec_desc - description of codec capabilities
@@ -427,8 +411,6 @@ struct snd_codec {
 	__u32 ch_mode;
 	__u32 format;
 	__u32 align;
-	__u32 transcode_dts;
-	struct snd_dec_dts dts;
 	union snd_codec_options options;
 	__u32 reserved[3];
 };

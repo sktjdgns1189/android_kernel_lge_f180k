@@ -1,4 +1,4 @@
-/* Copyright (c) 2011-2012, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2011-2013, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -1110,8 +1110,4 @@ int msm_bus_board_rpm_get_il_ids(uint16_t id[])
 	id[0] = MSM_RPM_STATUS_ID_EBI1_CH0_RANGE;
 	id[1] = MSM_RPM_STATUS_ID_EBI1_CH1_RANGE;
 	return 0;
-}
-
-void msm_bus_board_init(struct msm_bus_fabric_registration *pdata)
-{
 }

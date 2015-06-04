@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2013, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2011-2012, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -26,6 +26,123 @@
    their framework which is 0.1DegC. True resolution of 0.1DegC
    will result in the below table size to increase by 10 times */
 static const struct pm8xxx_adc_map_pt adcmap_btm_threshold[] = {
+#ifdef CONFIG_LGE_PM
+/*
+ * board speficic thermistor characteristic
+ * Rev.C (Real B): pull-up registor 105.0Kohm, series resistor = 16.0Kohm
+ * Please don't change below values.
+ */
+	{-300,	1675},
+	{-290,	1667},
+	{-280,	1659},
+	{-270,	1651},
+	{-260,	1642},
+	{-250,	1633},
+	{-240,	1623},
+	{-230,	1613},
+	{-220,	1602},
+	{-210,	1592},
+	{-200,	1580},
+	{-190,	1568},
+	{-180,	1556},
+	{-170,	1544},
+	{-160,	1531},
+	{-150,	1517},
+	{-140,	1503},
+	{-130,	1489},
+	{-120,	1474},
+	{-110,	1459},
+	{-100,	1444},
+	{-90,	1428},
+	{-80,	1412},
+	{-70,	1395},
+	{-60,	1378},
+	{-50,	1361},
+	{-40,	1343},
+	{-30,	1325},
+	{-20,	1307},
+	{-10,	1289},
+	{0, 	1270},
+	{10,	1251},
+	{20,	1232},
+	{30,	1213},
+	{40,	1194},
+	{50,	1174},
+	{60,	1155},
+	{70,	1135},
+	{80,	1115},
+	{90,	1096},
+	{100,	1076},
+	{110,	1057},
+	{120,	1037},
+	{130,	1018},
+	{140,	999},
+	{150,	980},
+	{160,	961},
+	{170,	942},
+	{180,	923},
+	{190,	905},
+	{200,	887},
+	{210,	869},
+	{220,	851},
+	{230,	834},
+	{240,	817},
+	{250,	800},
+	{260,	784},
+	{270,	767},
+	{280,	752},
+	{290,	736},
+	{300,	721},
+	{310,	706},
+	{320,	692},
+	{330,	678},
+	{340,	664},
+	{350,	650},
+	{360,	637},
+	{370,	625},
+	{380,	612},
+	{390,	600},
+	{400,	589},
+	{410,	577},
+	{420,	566},
+	{430,	555},
+	{440,	545},
+	{450,	535},
+	{460,	525},
+	{470,	516},
+	{480,	506},
+	{490,	498},
+	{500,	489},
+	{510,	481},
+	{520,	473},
+	{530,	465},
+	{540,	457},
+	{550,	450},
+	{560,	443},
+	{570,	436},
+	{580,	429},
+	{590,	423},
+	{600,	417},
+	{610,	411},
+	{620,	405},
+	{630,	400},
+	{640,	394},
+	{650,	389},
+	{660,	384},
+	{670,	379},
+	{680,	375},
+	{690,	370},
+	{700,	366},
+	{710,	362},
+	{720,	358},
+	{730,	354},
+	{740,	350},
+	{750,	346},
+	{760,	343},
+	{770,	339},
+	{780,	336},
+	{790,	333}
+#else /* qualcomm original code */
 	{-300,	1642},
 	{-200,	1544},
 	{-100,	1414},
@@ -109,6 +226,23 @@ static const struct pm8xxx_adc_map_pt adcmap_btm_threshold[] = {
 	{770,	213},
 	{780,	208},
 	{790,	203}
+#endif
+};
+
+static const struct pm8xxx_adc_map_pt adcmap_apq_therm[] = {
+/* APQ THERM placeholder for voltage to temperature mapping */
+/* e.g. and for reference only */
+	{2121,	-30},
+	{2085,  -25},
+	{2040,	-20},
+	{1913,	-10},
+	{1732,	0},
+	{1502,	10},
+	{1242,	20},
+	{981,	30},
+	{746,	40},
+	{553,	50},
+	{403,	60},
 };
 
 static const struct pm8xxx_adc_map_pt adcmap_pa_therm[] = {
@@ -271,174 +405,172 @@ static const struct pm8xxx_adc_map_pt adcmap_pa_therm[] = {
 };
 
 static const struct pm8xxx_adc_map_pt adcmap_ntcg_104ef_104fb[] = {
-	{374682,	-40960},
-	{360553,	-39936},
-	{346630,	-38912},
-	{332940,	-37888},
-	{319510,	-36864},
-	{306363,	-35840},
-	{293521,	-34816},
-	{281001,	-33792},
-	{268818,	-32768},
-	{256987,	-31744},
-	{245516,	-30720},
-	{234413,	-29696},
-	{223685,	-28672},
-	{213333,	-27648},
-	{203360,	-26624},
-	{193763,	-25600},
-	{184541,	-24576},
-	{175691,	-23552},
-	{167205,	-22528},
-	{159079,	-21504},
-	{151304,	-20480},
-	{143872,	-19456},
-	{136775,	-18432},
-	{130001,	-17408},
-	{123542,	-16384},
-	{117387,	-15360},
-	{111526,	-14336},
-	{105946,	-13312},
-	{100639,	-12288},
-	{95592,		-11264},
-	{90795,		-10240},
-	{86238,		-9216},
-	{81909,		-8192},
-	{77800,		-7168},
-	{73899,		-6144},
-	{70197,		-5120},
-	{66685,		-4096},
-	{63354,		-3072},
-	{60194,		-2048},
-	{57198,		-1024},
-	{54356,		0},
-	{51662,		1024},
-	{49108,		2048},
-	{46687,		3072},
-	{44391,		4096},
-	{42215,		5120},
-	{40151,		6144},
-	{38195,		7168},
-	{36340,		8192},
-	{34582,		9216},
-	{32914,		10240},
-	{31333,		11264},
-	{29833,		12288},
-	{28410,		13312},
-	{27061,		14336},
-	{25781,		15360},
-	{24566,		16384},
-	{23413,		17408},
-	{22319,		18432},
-	{21280,		19456},
-	{20294,		20480},
-	{19358,		21504},
-	{18469,		22528},
-	{17624,		23552},
-	{16822,		24576},
-	{16060,		25600},
-	{15335,		26624},
-	{14646,		27648},
-	{13992,		28672},
-	{13369,		29696},
-	{12777,		30720},
-	{12214,		31744},
-	{11678,		32768},
-	{11168,		33792},
-	{10682,		34816},
-	{10220,		35840},
-	{9780,		36864},
-	{9361,		37888},
-	{8962,		38912},
-	{8582,		39936},
-	{8219,		40960},
-	{7874,		41984},
-	{7545,		43008},
-	{7231,		44032},
-	{6931,		45056},
-	{6646,		46080},
-	{6373,		47104},
-	{6113,		48128},
-	{5865,		49152},
-	{5628,		50176},
-	{5402,		51200},
-	{5185,		52224},
-	{4979,		53248},
-	{4782,		54272},
-	{4593,		55296},
-	{4413,		56320},
-	{4241,		57344},
-	{4076,		58368},
-	{3919,		59392},
-	{3768,		60416},
-	{3624,		61440},
-	{3486,		62464},
-	{3354,		63488},
-	{3227,		64512},
-	{3106,		65536},
-	{2990,		66560},
-	{2879,		67584},
-	{2773,		68608},
-	{2671,		69632},
-	{2573,		70656},
-	{2479,		71680},
-	{2390,		72704},
-	{2303,		73728},
-	{2221,		74752},
-	{2142,		75776},
-	{2066,		76800},
-	{1993,		77824},
-	{1923,		78848},
-	{1855,		79872},
-	{1791,		80896},
-	{1729,		81920},
-	{1669,		82944},
-	{1612,		83968},
-	{1557,		84992},
-	{1504,		86016},
-	{1453,		87040},
-	{1404,		88064},
-	{1357,		89088},
-	{1312,		90112},
-	{1269,		91136},
-	{1227,		92160},
-	{1187,		93184},
-	{1148,		94208},
-	{1111,		95232},
-	{1075,		96256},
-	{1040,		97280},
-	{1007,		98304},
-	{975,		99328},
-	{944,		100352},
-	{914,		101376},
+	{696483,	-40960},
+	{649148,	-39936},
+	{605368,	-38912},
+	{564809,	-37888},
+	{527215,	-36864},
+	{492322,	-35840},
+	{460007,	-34816},
+	{429982,	-33792},
+	{402099,	-32768},
+	{376192,	-31744},
+	{352075,	-30720},
+	{329714,	-29696},
+	{308876,	-28672},
+	{289480,	-27648},
+	{271417,	-26624},
+	{254574,	-25600},
+	{238903,	-24576},
+	{224276,	-23552},
+	{210631,	-22528},
+	{197896,	-21504},
+	{186007,	-20480},
+	{174899,	-19456},
+	{164521,	-18432},
+	{154818,	-17408},
+	{145744,	-16384},
+	{137265,	-15360},
+	{129307,	-14336},
+	{121866,	-13312},
+	{114896,	-12288},
+	{108365,	-11264},
+	{102252,	-10240},
+	{96499,		-9216},
+	{91111,		-8192},
+	{86055,		-7168},
+	{81308,		-6144},
+	{76857,		-5120},
+	{72660,		-4096},
+	{68722,		-3072},
+	{65020,		-2048},
+	{61538,		-1024},
+	{58261,		0},
+	{55177,		1024},
+	{52274,		2048},
+	{49538,		3072},
+	{46962,		4096},
+	{44531,		5120},
+	{42243,		6144},
+	{40083,		7168},
+	{38045,		8192},
+	{36122,		9216},
+	{34308,		10240},
+	{32592,		11264},
+	{30972,		12288},
+	{29442,		13312},
+	{27995,		14336},
+	{26624,		15360},
+	{25333,		16384},
+	{24109,		17408},
+	{22951,		18432},
+	{21854,		19456},
+	{20807,		20480},
+	{19831,		21504},
+	{18899,		22528},
+	{18016,		23552},
+	{17178,		24576},
+	{16384,		25600},
+	{15631,		26624},
+	{14916,		27648},
+	{14237,		28672},
+	{13593,		29696},
+	{12976,		30720},
+	{12400,		31744},
+	{11848,		32768},
+	{11324,		33792},
+	{10825,		34816},
+	{10354,		35840},
+	{9900,		36864},
+	{9471,		37888},
+	{9062,		38912},
+	{8674,		39936},
+	{8306,		40960},
+	{7951,		41984},
+	{7616,		43008},
+	{7296,		44032},
+	{6991,		45056},
+	{6701,		46080},
+	{6424,		47104},
+	{6160,		48128},
+	{5908,		49152},
+	{5667,		50176},
+	{5439,		51200},
+	{5219,		52224},
+	{5010,		53248},
+	{4810,		54272},
+	{4619,		55296},
+	{4440,		56320},
+	{4263,		57344},
+	{4097,		58368},
+	{3938,		59392},
+	{3785,		60416},
+	{3637,		61440},
+	{3501,		62464},
+	{3368,		63488},
+	{3240,		64512},
+	{3118,		65536},
+	{2998,		66560},
+	{2889,		67584},
+	{2782,		68608},
+	{2680,		69632},
+	{2581,		70656},
+	{2490,		71680},
+	{2397,		72704},
+	{2310,		73728},
+	{2227,		74752},
+	{2147,		75776},
+	{2064,		76800},
+	{1998,		77824},
+	{1927,		78848},
+	{1860,		79872},
+	{1795,		80896},
+	{1736,		81920},
+	{1673,		82944},
+	{1615,		83968},
+	{1560,		84992},
+	{1507,		86016},
+	{1456,		87040},
+	{1407,		88064},
+	{1360,		89088},
+	{1314,		90112},
+	{1271,		91136},
+	{1228,		92160},
+	{1189,		93184},
+	{1150,		94208},
+	{1112,		95232},
+	{1076,		96256},
+	{1042,		97280},
+	{1008,		98304},
+	{976,		99328},
+	{945,		100352},
+	{915,		101376},
 	{886,		102400},
-	{858,		103424},
-	{831,		104448},
-	{806,		105472},
-	{781,		106496},
-	{757,		107520},
-	{734,		108544},
+	{859,		103424},
+	{832,		104448},
+	{807,		105472},
+	{782,		106496},
+	{756,		107520},
+	{735,		108544},
 	{712,		109568},
-	{690,		110592},
+	{691,		110592},
 	{670,		111616},
 	{650,		112640},
-	{630,		113664},
+	{631,		113664},
 	{612,		114688},
 	{594,		115712},
-	{576,		116736},
-	{559,		117760},
-	{543,		118784},
-	{527,		119808},
-	{512,		120832},
+	{577,		116736},
+	{560,		117760},
+	{544,		118784},
+	{528,		119808},
+	{513,		120832},
 	{498,		121856},
 	{483,		122880},
 	{470,		123904},
-	{456,		124928},
+	{457,		124928},
 	{444,		125952},
 	{431,		126976},
-	{419,		128000},
-	{408,		129024},
-	{396,		130048}
+	{419,		128000}
 };
 
 static int32_t pm8xxx_adc_map_linear(const struct pm8xxx_adc_map_pt *pts,
@@ -613,6 +745,37 @@ static int64_t pm8xxx_adc_scale_ratiometric_calib(int32_t adc_code,
 	return adc_voltage;
 }
 
+#if (defined(CONFIG_MACH_APQ8064_OMEGAR_KR) || defined(CONFIG_MACH_APQ8064_OMEGA_KR)) && defined(CONFIG_TOUCHSCREEN_SYNAPTICS_I2C_RMI4)
+#define TOUCH_BATT_TEMPERATURE_DEGREE	45*10
+#define TOUCH_BATT_THERMAL_THRESHOLD	2*10
+#define TOUCH_TEMPERATURE_DEGREE	50
+#define TOUCH_THERMAL_THRESHOLD	3
+int touch_thermal_mode = 0;
+static int64_t touch_batt_temperature = 0;
+static int64_t touch_apq_temperature = 0;
+extern  void check_touch_xo_therm(int type);
+
+int check_touch_need_therm_mode(void)
+{
+	if(touch_batt_temperature >= TOUCH_BATT_TEMPERATURE_DEGREE && touch_apq_temperature >= TOUCH_TEMPERATURE_DEGREE)
+	{
+		touch_thermal_mode = 11; /* apq_therm is already high. 11 means that both batt_therm and apq_therm are high.*/
+		return 1;
+	}
+	else if(touch_batt_temperature >= TOUCH_BATT_TEMPERATURE_DEGREE)
+	{
+		touch_thermal_mode = 10; /* only batt_therm is high.*/
+		return 1;
+	}
+	else if(touch_apq_temperature >= TOUCH_TEMPERATURE_DEGREE)
+	{
+		touch_thermal_mode = 1; /* only apq_therm is high.*/
+		return 1;
+	}else
+		return 0;
+}
+#endif
+
 int32_t pm8xxx_adc_scale_batt_therm(int32_t adc_code,
 		const struct pm8xxx_adc_properties *adc_properties,
 		const struct pm8xxx_adc_chan_properties *chan_properties,
@@ -622,12 +785,39 @@ int32_t pm8xxx_adc_scale_batt_therm(int32_t adc_code,
 
 	bat_voltage = pm8xxx_adc_scale_ratiometric_calib(adc_code,
 			adc_properties, chan_properties);
+#ifdef CONFIG_MACH_APQ8064_ALTEV
+	adc_chan_result->adc_value = bat_voltage;
+#endif
+#if (defined(CONFIG_MACH_APQ8064_OMEGAR_KR) || defined(CONFIG_MACH_APQ8064_OMEGA_KR)) && defined(CONFIG_TOUCHSCREEN_SYNAPTICS_I2C_RMI4)
+	{
+		int32_t result = 0;
+		result = pm8xxx_adc_map_batt_therm(
+			adcmap_btm_threshold,
+			ARRAY_SIZE(adcmap_btm_threshold),
+			bat_voltage,
+			&adc_chan_result->physical);
 
+		touch_batt_temperature = adc_chan_result->physical;
+		if(touch_thermal_mode == 0 && adc_chan_result->physical >= TOUCH_BATT_TEMPERATURE_DEGREE) {
+			touch_thermal_mode = 10; /* only batt_therm is high.*/
+			check_touch_xo_therm(1);
+		} else if(touch_thermal_mode == 1 && adc_chan_result->physical >= TOUCH_BATT_TEMPERATURE_DEGREE){
+			touch_thermal_mode = 11; /* apq_therm is already high. 11 means that both batt_therm and apq_therm are high.*/
+		} else if(touch_thermal_mode == 10 && adc_chan_result->physical < (TOUCH_BATT_TEMPERATURE_DEGREE-TOUCH_BATT_THERMAL_THRESHOLD)){
+			touch_thermal_mode = 0; /* 10 means that only batt_therm was high.*/
+			check_touch_xo_therm(0);
+		} else if(touch_thermal_mode == 11 && adc_chan_result->physical < (TOUCH_BATT_TEMPERATURE_DEGREE-TOUCH_BATT_THERMAL_THRESHOLD)){
+			touch_thermal_mode = 1; /* apq_therm remains high.*/
+		}
+		return result;
+	}
+#else
 	return pm8xxx_adc_map_batt_therm(
 			adcmap_btm_threshold,
 			ARRAY_SIZE(adcmap_btm_threshold),
 			bat_voltage,
 			&adc_chan_result->physical);
+#endif
 }
 EXPORT_SYMBOL_GPL(pm8xxx_adc_scale_batt_therm);
 
@@ -640,7 +830,9 @@ int32_t pm8xxx_adc_scale_pa_therm(int32_t adc_code,
 
 	pa_voltage = pm8xxx_adc_scale_ratiometric_calib(adc_code,
 			adc_properties, chan_properties);
-
+#ifdef CONFIG_MACH_APQ8064_ALTEV
+    adc_chan_result->adc_value = pa_voltage;
+#endif
 	return pm8xxx_adc_map_linear(
 			adcmap_pa_therm,
 			ARRAY_SIZE(adcmap_pa_therm),
@@ -648,6 +840,58 @@ int32_t pm8xxx_adc_scale_pa_therm(int32_t adc_code,
 			&adc_chan_result->physical);
 }
 EXPORT_SYMBOL_GPL(pm8xxx_adc_scale_pa_therm);
+
+int32_t pm8xxx_adc_scale_apq_therm(int32_t adc_code,
+		const struct pm8xxx_adc_properties *adc_properties,
+		const struct pm8xxx_adc_chan_properties *chan_properties,
+		struct pm8xxx_adc_chan_result *adc_chan_result)
+{
+/* Reference only - Place holder to add APQ THERM */
+/* Initial addition by adding the pa_therm funtionlity above */
+	int64_t apq_voltage = 0;
+
+	apq_voltage = pm8xxx_adc_scale_ratiometric_calib(adc_code,
+			adc_properties, chan_properties);
+#if (defined(CONFIG_MACH_APQ8064_OMEGAR_KR) || defined(CONFIG_MACH_APQ8064_OMEGA_KR)) && defined(CONFIG_TOUCHSCREEN_SYNAPTICS_I2C_RMI4)
+	{
+		int32_t result = 0;
+		result = pm8xxx_adc_map_linear(
+			adcmap_apq_therm,
+			ARRAY_SIZE(adcmap_apq_therm),
+			apq_voltage,
+			&adc_chan_result->physical);
+
+		touch_apq_temperature = adc_chan_result->physical;
+		if(touch_thermal_mode == 0 && adc_chan_result->physical >= TOUCH_TEMPERATURE_DEGREE) {
+			touch_thermal_mode = 1; /* only apq_therm is high.*/
+			check_touch_xo_therm(1);
+		} else if(touch_thermal_mode == 10 && adc_chan_result->physical >= TOUCH_TEMPERATURE_DEGREE){
+			touch_thermal_mode = 11; /* batt_therm is already high. 11 means that both batt_therm and apq_therm are high.*/
+		} else if(touch_thermal_mode == 1 && adc_chan_result->physical < (TOUCH_TEMPERATURE_DEGREE-TOUCH_THERMAL_THRESHOLD)){
+			touch_thermal_mode = 0; /* 1 means that only apq_therm was high.*/
+			check_touch_xo_therm(0);
+		} else if(touch_thermal_mode == 11 && adc_chan_result->physical < (TOUCH_TEMPERATURE_DEGREE-TOUCH_THERMAL_THRESHOLD)){
+			touch_thermal_mode = 10; /*batt_therm remains high.*/
+		}
+		return result;
+	}
+#else
+#ifdef CONFIG_MACH_APQ8064_ALTEV
+    adc_chan_result->adc_value = apq_voltage;
+#endif
+	return pm8xxx_adc_map_linear(
+#if defined(CONFIG_MACH_APQ8064_ALTEV) || defined(CONFIG_MACH_APQ8064_AWIFI) || defined(CONFIG_MACH_APQ8064_L05E)
+			adcmap_pa_therm,
+                        ARRAY_SIZE(adcmap_pa_therm),
+#else
+			adcmap_apq_therm,
+                        ARRAY_SIZE(adcmap_apq_therm),			
+#endif
+			apq_voltage,
+			&adc_chan_result->physical);
+#endif
+}
+EXPORT_SYMBOL_GPL(pm8xxx_adc_scale_apq_therm);
 
 int32_t pm8xxx_adc_scale_batt_id(int32_t adc_code,
 		const struct pm8xxx_adc_properties *adc_properties,
@@ -718,10 +962,6 @@ int32_t pm8xxx_adc_tdkntcg_therm(int32_t adc_code,
 		struct pm8xxx_adc_chan_result *adc_chan_result)
 {
 	int64_t xo_thm = 0;
-	uint32_t num1 = 0;
-	uint32_t num2 = 0;
-	uint32_t dnum = 0;
-	uint32_t rt_r25 = 0;
 
 	if (!chan_properties || !chan_properties->offset_gain_numerator ||
 		!chan_properties->offset_gain_denominator || !adc_properties
@@ -730,21 +970,10 @@ int32_t pm8xxx_adc_tdkntcg_therm(int32_t adc_code,
 
 	xo_thm = pm8xxx_adc_scale_ratiometric_calib(adc_code,
 			adc_properties, chan_properties);
-	if (xo_thm < 0)
-		xo_thm = -xo_thm;
-
-	num1 = xo_thm << 14;
-	num2 = (adc_properties->adc_vdd_reference - xo_thm) >> 1;
-	dnum = (adc_properties->adc_vdd_reference - xo_thm);
-
-	if (dnum == 0)
-		rt_r25 = 0x7FFFFFFF ;
-	else
-		rt_r25 = (num1 + num2)/dnum ;
-
+	xo_thm <<= 4;
 	pm8xxx_adc_map_linear(adcmap_ntcg_104ef_104fb,
 		ARRAY_SIZE(adcmap_ntcg_104ef_104fb),
-		rt_r25, &adc_chan_result->physical);
+		xo_thm, &adc_chan_result->physical);
 
 	return 0;
 }

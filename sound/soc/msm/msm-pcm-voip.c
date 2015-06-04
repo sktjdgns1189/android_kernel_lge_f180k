@@ -1,4 +1,4 @@
-/* Copyright (c) 2011-2013, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2011-2012, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -43,25 +43,6 @@
 #define MODE_AMR		0x5
 #define MODE_AMR_WB		0xD
 #define MODE_PCM		0xC
-#define MODE_G711		0xA
-#define MODE_G711A		0xF
-
-enum msm_audio_g711a_frame_type {
-	MVS_G711A_SPEECH_GOOD,
-	MVS_G711A_SID,
-	MVS_G711A_NO_DATA,
-	MVS_G711A_ERASURE
-};
-
-enum msm_audio_g711a_mode {
-	MVS_G711A_MODE_MULAW,
-	MVS_G711A_MODE_ALAW
-};
-
-enum msm_audio_g711_mode {
-	MVS_G711_MODE_MULAW,
-	MVS_G711_MODE_ALAW
-};
 
 enum format {
 	FORMAT_S16_LE = 2,
@@ -154,9 +135,8 @@ struct voip_drv_info {
 	unsigned int pcm_capture_buf_pos;       /* position in buffer */
 };
 
-static int voip_get_media_type(uint32_t mode, uint32_t rate_type,
-				unsigned int samp_rate,
-				uint32_t *media_type);
+static int voip_get_media_type(uint32_t mode,
+				unsigned int samp_rate);
 static int voip_get_rate_type(uint32_t mode,
 				uint32_t rate,
 				uint32_t *rate_type);
@@ -250,17 +230,45 @@ static int msm_voip_dtx_mode_get(struct snd_kcontrol *kcontrol,
 
 	return 0;
 }
+static int msm_voip_fens_put(struct snd_kcontrol *kcontrol,
+			struct snd_ctl_elem_value *ucontrol)
+{
+	int fens_enable = ucontrol->value.integer.value[0];
+
+	pr_debug("%s: FENS_VOIP enable=%d\n", __func__, fens_enable);
+
+	voc_set_pp_enable(voc_get_session_id(VOIP_SESSION_NAME),
+				MODULE_ID_VOICE_MODULE_FENS, fens_enable);
+
+	return 0;
+}
+
+static int msm_voip_fens_get(struct snd_kcontrol *kcontrol,
+			struct snd_ctl_elem_value *ucontrol)
+{
+	ucontrol->value.integer.value[0] =
+			voc_get_pp_enable(voc_get_session_id(VOIP_SESSION_NAME),
+				 MODULE_ID_VOICE_MODULE_FENS);
+	return 0;
+}
 
 static struct snd_kcontrol_new msm_voip_controls[] = {
 	SOC_SINGLE_EXT("Voip Tx Mute", SND_SOC_NOPM, 0, 1, 0,
 				msm_voip_mute_get, msm_voip_mute_put),
+#if defined(CONFIG_MACH_APQ8064_J1SK) || defined(CONFIG_MACH_APQ8064_J1KT) || defined(CONFIG_MACH_APQ8064_J1U) || defined(CONFIG_MACH_APQ8064_GKSK) || defined(CONFIG_MACH_APQ8064_GKKT) || defined(CONFIG_MACH_APQ8064_GKU)
+	SOC_SINGLE_EXT("Voip Rx Volume", SND_SOC_NOPM, 0, 9, 0,
+				msm_voip_volume_get, msm_voip_volume_put),
+#else
 	SOC_SINGLE_EXT("Voip Rx Volume", SND_SOC_NOPM, 0, 5, 0,
 				msm_voip_volume_get, msm_voip_volume_put),
+#endif
 	SOC_SINGLE_MULTI_EXT("Voip Mode Rate Config", SND_SOC_NOPM, 0, 23850,
 				0, 2, msm_voip_mode_rate_config_get,
 				msm_voip_mode_rate_config_put),
 	SOC_SINGLE_EXT("Voip Dtx Mode", SND_SOC_NOPM, 0, 1, 0,
 				msm_voip_dtx_mode_get, msm_voip_dtx_mode_put),
+	SOC_SINGLE_EXT("FENS_VOIP Enable", SND_SOC_NOPM, 0, 1, 0,
+			   msm_voip_fens_get, msm_voip_fens_put),
 };
 
 static int msm_pcm_voip_probe(struct snd_soc_platform *platform)
@@ -327,79 +335,6 @@ static void voip_process_ul_pkt(uint8_t *voc_pkt,
 				buf_node->frame.len);
 
 			list_add_tail(&buf_node->list, &prtd->out_queue);
-			break;
-		}
-		case MODE_G711:
-		case MODE_G711A:{
-			/* G711 frames are 10ms each, but the DSP works with
-			 * 20ms frames and sends two 10ms frames per buffer.
-			 * Extract the two frames and put them in separate
-			 * buffers.
-			 */
-			/* Remove the first DSP frame info header.
-			 * Header format: G711A
-			 * Bits 0-1: Frame type
-			 * Bits 2-3: Frame rate
-			 *
-			 * Header format: G711
-			 * Bits 2-3: Frame rate
-			 */
-			if (prtd->mode == MODE_G711A)
-				buf_node->frame.header.frame_type =
-							(*voc_pkt) & 0x03;
-			voc_pkt = voc_pkt + DSP_FRAME_HDR_LEN;
-
-			/* There are two frames in the buffer. Length of the
-			 * first frame:
-			 */
-			buf_node->frame.len = (pkt_len -
-					       2 * DSP_FRAME_HDR_LEN) / 2;
-
-			memcpy(&buf_node->frame.voc_pkt[0],
-			       voc_pkt,
-			       buf_node->frame.len);
-			voc_pkt = voc_pkt + buf_node->frame.len;
-
-			list_add_tail(&buf_node->list, &prtd->out_queue);
-
-			/* Get another buffer from the free Q and fill in the
-			 * second frame.
-			 */
-			if (!list_empty(&prtd->free_out_queue)) {
-				buf_node =
-					list_first_entry(&prtd->free_out_queue,
-							 struct voip_buf_node,
-							 list);
-				list_del(&buf_node->list);
-
-				/* Remove the second DSP frame info header.
-				 * Header format:
-				 * Bits 0-1: Frame type
-				 * Bits 2-3: Frame rate
-				 */
-
-				if (prtd->mode == MODE_G711A)
-					buf_node->frame.header.frame_type =
-							(*voc_pkt) & 0x03;
-				voc_pkt = voc_pkt + DSP_FRAME_HDR_LEN;
-
-				/* There are two frames in the buffer. Length
-				 * of the second frame:
-				 */
-				buf_node->frame.len = (pkt_len -
-					2 * DSP_FRAME_HDR_LEN) / 2;
-
-				memcpy(&buf_node->frame.voc_pkt[0],
-				       voc_pkt,
-				       buf_node->frame.len);
-
-				list_add_tail(&buf_node->list,
-					      &prtd->out_queue);
-			} else {
-				/* Drop the second frame */
-				pr_err("%s: UL data dropped, read is slow\n",
-				       __func__);
-			}
 			break;
 		}
 		default: {
@@ -474,67 +409,6 @@ static void voip_process_dl_pkt(uint8_t *voc_pkt,
 				buf_node->frame.len);
 
 			list_add_tail(&buf_node->list, &prtd->free_in_queue);
-			break;
-		}
-		case MODE_G711:
-		case MODE_G711A:{
-			/* G711 frames are 10ms each but the DSP expects 20ms
-			 * worth of data, so send two 10ms frames per buffer.
-			 */
-			/* Add the first DSP frame info header. Header format:
-			 * Bits 0-1: Frame type
-			 * Bits 2-3: Frame rate
-			 */
-
-			*voc_pkt = ((prtd->rate_type  & 0x0F) << 2) |
-				    (buf_node->frame.header.frame_type & 0x03);
-			voc_pkt = voc_pkt + DSP_FRAME_HDR_LEN;
-
-			*pkt_len = buf_node->frame.len + DSP_FRAME_HDR_LEN;
-
-			memcpy(voc_pkt,
-			       &buf_node->frame.voc_pkt[0],
-			       buf_node->frame.len);
-			voc_pkt = voc_pkt + buf_node->frame.len;
-
-			list_add_tail(&buf_node->list, &prtd->free_in_queue);
-
-			if (!list_empty(&prtd->in_queue)) {
-				/* Get the second buffer. */
-				buf_node = list_first_entry(&prtd->in_queue,
-							struct voip_buf_node,
-							list);
-				list_del(&buf_node->list);
-
-				/* Add the second DSP frame info header.
-				 * Header format:
-				 * Bits 0-1: Frame type
-				 * Bits 2-3: Frame rate
-				 */
-				*voc_pkt = ((prtd->rate_type & 0x0F) << 2) |
-				(buf_node->frame.header.frame_type & 0x03);
-				voc_pkt = voc_pkt + DSP_FRAME_HDR_LEN;
-
-				*pkt_len = *pkt_len +
-					buf_node->frame.len + DSP_FRAME_HDR_LEN;
-
-				memcpy(voc_pkt,
-				       &buf_node->frame.voc_pkt[0],
-				       buf_node->frame.len);
-
-				list_add_tail(&buf_node->list,
-					      &prtd->free_in_queue);
-			} else {
-				/* Only 10ms worth of data is available, signal
-				 * erasure frame.
-				 */
-				*voc_pkt = ((prtd->rate_type & 0x0F) << 2) |
-					    (MVS_G711A_ERASURE & 0x03);
-
-				*pkt_len = *pkt_len + DSP_FRAME_HDR_LEN;
-				pr_debug("%s, Only 10ms read, erase 2nd frame\n",
-					 __func__);
-			}
 			break;
 		}
 		default: {
@@ -751,7 +625,7 @@ static int msm_pcm_capture_copy(struct snd_pcm_substream *substream,
 
 				ret = copy_to_user(buf,
 						   &buf_node->frame,
-						   size;
+						   size);
 			}
 			if (ret) {
 				pr_err("%s: Copy to user retuned %d\n",
@@ -913,8 +787,7 @@ static int msm_pcm_prepare(struct snd_pcm_substream *substream)
 	if ((runtime->format != FORMAT_SPECIAL) &&
 		 ((prtd->mode == MODE_AMR) || (prtd->mode == MODE_AMR_WB) ||
 		 (prtd->mode == MODE_IS127) || (prtd->mode == MODE_4GV_NB) ||
-		 (prtd->mode == MODE_4GV_WB) || (prtd->mode == MODE_G711) ||
-		 (prtd->mode == MODE_G711A))) {
+		 (prtd->mode == MODE_4GV_WB))) {
 		pr_err("mode:%d and format:%u are not mached\n",
 			prtd->mode, (uint32_t)runtime->format);
 		ret =  -EINVAL;
@@ -941,12 +814,11 @@ static int msm_pcm_prepare(struct snd_pcm_substream *substream)
 			goto done;
 		}
 		prtd->rate_type = rate_type;
-		ret = voip_get_media_type(prtd->mode,
-					  prtd->rate_type,
-					  prtd->play_samp_rate,
-					  &media_type);
-		if (ret < 0) {
+		media_type = voip_get_media_type(prtd->mode,
+						prtd->play_samp_rate);
+		if (media_type < 0) {
 			pr_err("fail at getting media_type\n");
+			ret = -EINVAL;
 			goto done;
 		}
 		pr_debug(" media_type=%d, rate_type=%d\n", media_type,
@@ -1203,10 +1075,6 @@ static int voip_get_rate_type(uint32_t mode, uint32_t rate,
 		}
 		break;
 	}
-	case MODE_G711:
-	case MODE_G711A:
-		*rate_type = rate;
-		break;
 	default:
 		pr_err("wrong mode type.\n");
 		ret = -EINVAL;
@@ -1216,51 +1084,43 @@ static int voip_get_rate_type(uint32_t mode, uint32_t rate,
 	return ret;
 }
 
-static int voip_get_media_type(uint32_t mode, uint32_t rate_type,
-				unsigned int samp_rate,
-				uint32_t *media_type)
+static int voip_get_media_type(uint32_t mode,
+				unsigned int samp_rate)
 {
-	int ret = 0;
+	uint32_t media_type;
 
 	pr_debug("%s: mode=%d, samp_rate=%d\n", __func__,
 		mode, samp_rate);
 	switch (mode) {
 	case MODE_AMR:
-		*media_type = VSS_MEDIA_ID_AMR_NB_MODEM;
+		media_type = VSS_MEDIA_ID_AMR_NB_MODEM;
 		break;
 	case MODE_AMR_WB:
-		*media_type = VSS_MEDIA_ID_AMR_WB_MODEM;
+		media_type = VSS_MEDIA_ID_AMR_WB_MODEM;
 		break;
 	case MODE_PCM:
 		if (samp_rate == 8000)
-			*media_type = VSS_MEDIA_ID_PCM_NB;
+			media_type = VSS_MEDIA_ID_PCM_NB;
 		else
-			*media_type = VSS_MEDIA_ID_PCM_WB;
+			media_type = VSS_MEDIA_ID_PCM_WB;
 		break;
 	case MODE_IS127: /* EVRC-A */
-		*media_type = VSS_MEDIA_ID_EVRC_MODEM;
+		media_type = VSS_MEDIA_ID_EVRC_MODEM;
 		break;
 	case MODE_4GV_NB: /* EVRC-B */
-		*media_type = VSS_MEDIA_ID_4GV_NB_MODEM;
+		media_type = VSS_MEDIA_ID_4GV_NB_MODEM;
 		break;
 	case MODE_4GV_WB: /* EVRC-WB */
-		*media_type = VSS_MEDIA_ID_4GV_WB_MODEM;
-		break;
-	case MODE_G711:
-	case MODE_G711A:
-		if (rate_type == MVS_G711A_MODE_MULAW)
-			*media_type = VSS_MEDIA_ID_G711_MULAW;
-		else
-			*media_type = VSS_MEDIA_ID_G711_ALAW;
+		media_type = VSS_MEDIA_ID_4GV_WB_MODEM;
 		break;
 	default:
 		pr_debug(" input mode is not supported\n");
-		ret = -EINVAL;
+		media_type = -EINVAL;
 	}
 
-	pr_debug("%s: media_type is 0x%x\n", __func__, *media_type);
+	pr_debug("%s: media_type is 0x%x\n", __func__, media_type);
 
-	return ret;
+	return media_type;
 }
 
 

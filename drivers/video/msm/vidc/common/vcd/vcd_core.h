@@ -1,4 +1,4 @@
-/* Copyright (c) 2010-2012, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2010-2013, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -37,7 +37,6 @@
 
 #define VCD_TIMESTAMP_RESOLUTION             1000000
 #define VCD_DEC_INITIAL_FRAME_RATE           30
-#define VCD_MAXPERF_FPS_THRESHOLD_X_1000     (59*1000)
 
 #define VCD_FIRST_IP_RCVD                    0x00000004
 #define VCD_FIRST_OP_RCVD                    0x00000008

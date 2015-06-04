@@ -1,4 +1,4 @@
-/* Copyright (c) 2002,2007-2014, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2002,2007-2012,2014, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -146,7 +146,9 @@ static struct kobj_type ktype_mem_entry = {
 
 static struct mem_entry_stats mem_stats[] = {
 	MEM_ENTRY_STAT(KGSL_MEM_ENTRY_KERNEL, kernel),
+#ifdef CONFIG_ANDROID_PMEM
 	MEM_ENTRY_STAT(KGSL_MEM_ENTRY_PMEM, pmem),
+#endif
 #ifdef CONFIG_ASHMEM
 	MEM_ENTRY_STAT(KGSL_MEM_ENTRY_ASHMEM, ashmem),
 #endif
@@ -170,21 +172,8 @@ kgsl_process_uninit_sysfs(struct kgsl_process_private *private)
 	kobject_put(&private->kobj);
 }
 
-/**
- * kgsl_process_init_sysfs() - Initialize and create sysfs files for a process
- *
- * @device: Pointer to kgsl device struct
- * @private: Pointer to the structure for the process
- *
- * @returns: 0 on success, error code otherwise
- *
- * kgsl_process_init_sysfs() is called at the time of creating the
- * process struct when a process opens the kgsl device for the first time.
- * This function creates the sysfs files for the process.
- */
 int
-kgsl_process_init_sysfs(struct kgsl_device *device,
-		struct kgsl_process_private *private)
+kgsl_process_init_sysfs(struct kgsl_process_private *private)
 {
 	unsigned char name[16];
 	int i, ret = 0;
@@ -250,29 +239,6 @@ static int kgsl_drv_histogram_show(struct device *dev,
 	return len;
 }
 
-static int kgsl_drv_full_cache_threshold_store(struct device *dev,
-					 struct device_attribute *attr,
-					 const char *buf, size_t count)
-{
-	int ret;
-	unsigned int thresh = 0;
-
-	ret = kgsl_sysfs_store(buf, &thresh);
-	if (ret)
-		return ret;
-
-	kgsl_driver.full_cache_threshold = thresh;
-	return count;
-}
-
-static int kgsl_drv_full_cache_threshold_show(struct device *dev,
-					struct device_attribute *attr,
-					char *buf)
-{
-	return snprintf(buf, PAGE_SIZE, "%d\n",
-			kgsl_driver.full_cache_threshold);
-}
-
 DEVICE_ATTR(vmalloc, 0444, kgsl_drv_memstat_show, NULL);
 DEVICE_ATTR(vmalloc_max, 0444, kgsl_drv_memstat_show, NULL);
 DEVICE_ATTR(page_alloc, 0444, kgsl_drv_memstat_show, NULL);
@@ -282,9 +248,6 @@ DEVICE_ATTR(coherent_max, 0444, kgsl_drv_memstat_show, NULL);
 DEVICE_ATTR(mapped, 0444, kgsl_drv_memstat_show, NULL);
 DEVICE_ATTR(mapped_max, 0444, kgsl_drv_memstat_show, NULL);
 DEVICE_ATTR(histogram, 0444, kgsl_drv_histogram_show, NULL);
-DEVICE_ATTR(full_cache_threshold, 0644,
-		kgsl_drv_full_cache_threshold_show,
-		kgsl_drv_full_cache_threshold_store);
 
 static const struct device_attribute *drv_attr_list[] = {
 	&dev_attr_vmalloc,
@@ -296,7 +259,6 @@ static const struct device_attribute *drv_attr_list[] = {
 	&dev_attr_mapped,
 	&dev_attr_mapped_max,
 	&dev_attr_histogram,
-	&dev_attr_full_cache_threshold,
 	NULL
 };
 
@@ -406,8 +368,11 @@ static void kgsl_page_alloc_free(struct kgsl_memdesc *memdesc)
 		kgsl_driver.stats.vmalloc -= memdesc->size;
 	}
 	if (memdesc->sg)
-		for_each_sg(memdesc->sg, sg, sglen, i)
+		for_each_sg(memdesc->sg, sg, sglen, i){
+			if (sg->length == 0)
+				break;
 			__free_pages(sg_page(sg), get_order(sg->length));
+		}
 }
 
 static int kgsl_contiguous_vmflags(struct kgsl_memdesc *memdesc)
@@ -574,7 +539,6 @@ _kgsl_sharedmem_page_alloc(struct kgsl_memdesc *memdesc,
 	pgprot_t page_prot = pgprot_writecombine(PAGE_KERNEL);
 	void *ptr;
 	unsigned int align;
-	int step = ((VMALLOC_END - VMALLOC_START)/8) >> PAGE_SHIFT;
 
 	align = (memdesc->flags & KGSL_MEMALIGN_MASK) >> KGSL_MEMALIGN_SHIFT;
 
@@ -688,36 +652,30 @@ _kgsl_sharedmem_page_alloc(struct kgsl_memdesc *memdesc,
 	 * zeroed and unmaped each individual page, and then we had to turn
 	 * around and call flush_dcache_page() on that page to clear the caches.
 	 * This was killing us for performance. Instead, we found it is much
-	 * faster to allocate the pages without GFP_ZERO, map a chunk of the
-	 * range ('step' pages), memset it, flush it and then unmap
-	 * - this results in a factor of 4 improvement for speed for large
-	 * buffers. There is a small decrease in speed for small buffers,
-	 * but only on the order of a few microseconds at best. The 'step'
-	 * size is based on a guess at the amount of free vmalloc space, but
-	 * will scale down if there's not enough free space.
+	 * faster to allocate the pages without GFP_ZERO, map the entire range,
+	 * memset it, flush the range and then unmap - this results in a factor
+	 * of 4 improvement for speed for large buffers.  There is a small
+	 * increase in speed for small buffers, but only on the order of a few
+	 * microseconds at best.  The only downside is that there needs to be
+	 * enough temporary space in vmalloc to accomodate the map. This
+	 * shouldn't be a problem, but if it happens, fall back to a much slower
+	 * path
 	 */
-	for (j = 0; j < pcount; j += step) {
-		step = min(step, pcount - j);
 
-		ptr = vmap(&pages[j], step, VM_IOREMAP, page_prot);
+	ptr = vmap(pages, pcount, VM_IOREMAP, page_prot);
 
-		if (ptr != NULL) {
-			memset(ptr, 0, step * PAGE_SIZE);
-			dmac_flush_range(ptr, ptr + step * PAGE_SIZE);
-			vunmap(ptr);
-		} else {
-			int k;
-			/* Very, very, very slow path */
+	if (ptr != NULL) {
+		memset(ptr, 0, memdesc->size);
+		dmac_flush_range(ptr, ptr + memdesc->size);
+		vunmap(ptr);
+	} else {
+		/* Very, very, very slow path */
 
-			for (k = j; k < j + step; k++) {
-				ptr = kmap_atomic(pages[k]);
-				memset(ptr, 0, PAGE_SIZE);
-				dmac_flush_range(ptr, ptr + PAGE_SIZE);
-				kunmap_atomic(ptr);
-			}
-			/* scale down the step size to avoid this path */
-			if (step > 1)
-				step >>= 1;
+		for (j = 0; j < pcount; j++) {
+			ptr = kmap_atomic(pages[j]);
+			memset(ptr, 0, PAGE_SIZE);
+			dmac_flush_range(ptr, ptr + PAGE_SIZE);
+			kunmap_atomic(ptr);
 		}
 	}
 
@@ -752,8 +710,6 @@ kgsl_sharedmem_page_alloc(struct kgsl_memdesc *memdesc,
 	BUG_ON(size == 0);
 
 	size = ALIGN(size, PAGE_SIZE * 2);
-	if (size == 0)
-		return -EINVAL;
 
 	ret =  _kgsl_sharedmem_page_alloc(memdesc, pagetable, size);
 	if (!ret)
@@ -769,11 +725,7 @@ kgsl_sharedmem_page_alloc_user(struct kgsl_memdesc *memdesc,
 			    struct kgsl_pagetable *pagetable,
 			    size_t size)
 {
-	size = PAGE_ALIGN(size);
-	if (size == 0)
-		return -EINVAL;
-
-	return _kgsl_sharedmem_page_alloc(memdesc, pagetable, size);
+	return _kgsl_sharedmem_page_alloc(memdesc, pagetable, PAGE_ALIGN(size));
 }
 EXPORT_SYMBOL(kgsl_sharedmem_page_alloc_user);
 
@@ -783,8 +735,6 @@ kgsl_sharedmem_alloc_coherent(struct kgsl_memdesc *memdesc, size_t size)
 	int result = 0;
 
 	size = ALIGN(size, PAGE_SIZE);
-	if (size == 0)
-		return -EINVAL;
 
 	memdesc->size = size;
 	memdesc->ops = &kgsl_coherent_ops;
@@ -871,9 +821,6 @@ kgsl_sharedmem_ebimem_user(struct kgsl_memdesc *memdesc,
 			size_t size)
 {
 	size = ALIGN(size, PAGE_SIZE);
-	if (size == 0)
-		return -EINVAL;
-
 	return _kgsl_sharedmem_ebimem(memdesc, pagetable, size);
 }
 EXPORT_SYMBOL(kgsl_sharedmem_ebimem_user);
@@ -884,9 +831,6 @@ kgsl_sharedmem_ebimem(struct kgsl_memdesc *memdesc,
 {
 	int result;
 	size = ALIGN(size, 8192);
-	if (size == 0)
-		return -EINVAL;
-
 	result = _kgsl_sharedmem_ebimem(memdesc, pagetable, size);
 
 	if (result)
@@ -925,8 +869,7 @@ kgsl_sharedmem_readl(const struct kgsl_memdesc *memdesc,
 EXPORT_SYMBOL(kgsl_sharedmem_readl);
 
 int
-kgsl_sharedmem_writel(struct kgsl_device *device,
-			const struct kgsl_memdesc *memdesc,
+kgsl_sharedmem_writel(const struct kgsl_memdesc *memdesc,
 			unsigned int offsetbytes,
 			uint32_t src)
 {
@@ -939,8 +882,7 @@ kgsl_sharedmem_writel(struct kgsl_device *device,
 	WARN_ON(offsetbytes + sizeof(uint32_t) > memdesc->size);
 	if (offsetbytes + sizeof(uint32_t) > memdesc->size)
 		return -ERANGE;
-	kgsl_cffdump_setmem(device,
-		memdesc->gpuaddr + offsetbytes,
+	kgsl_cffdump_setmem(memdesc->gpuaddr + offsetbytes,
 		src, sizeof(uint32_t));
 	dst = (uint32_t *)(memdesc->hostptr + offsetbytes);
 	*dst = src;
@@ -949,16 +891,14 @@ kgsl_sharedmem_writel(struct kgsl_device *device,
 EXPORT_SYMBOL(kgsl_sharedmem_writel);
 
 int
-kgsl_sharedmem_set(struct kgsl_device *device,
-		const struct kgsl_memdesc *memdesc, unsigned int offsetbytes,
-		unsigned int value, unsigned int sizebytes)
+kgsl_sharedmem_set(const struct kgsl_memdesc *memdesc, unsigned int offsetbytes,
+			unsigned int value, unsigned int sizebytes)
 {
 	BUG_ON(memdesc == NULL || memdesc->hostptr == NULL);
 	BUG_ON(offsetbytes + sizebytes > memdesc->size);
 
-	kgsl_cffdump_setmem(device,
-		memdesc->gpuaddr + offsetbytes, value,
-		sizebytes);
+	kgsl_cffdump_setmem(memdesc->gpuaddr + offsetbytes, value,
+			    sizebytes);
 	memset(memdesc->hostptr + offsetbytes, value, sizebytes);
 	return 0;
 }

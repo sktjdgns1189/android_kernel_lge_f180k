@@ -266,16 +266,16 @@ static const u8 mxt_config_data_evt[] = {
 	/* T6 Object */
 	0, 0, 0, 0, 0, 0,
 	/* T38 Object */
-	20, 1, 0, 25, 9, 12, 0, 0,
+	20, 0, 0, 0, 0, 0, 0, 0,
 	/* T7 Object */
 	24, 12, 10,
 	/* T8 Object */
-	30, 0, 20, 20, 0, 0, 0, 0, 10, 192,
+	30, 0, 20, 20, 0, 0, 9, 45, 10, 192,
 	/* T9 Object */
-	131, 0, 0, 18, 11, 0, 16, 70, 2, 1,
-	0, 2, 1, 62, 10, 10, 10, 10, 107, 3,
-	223, 1, 2, 2, 20, 20, 172, 40, 139, 110,
-	10, 15, 0, 0, 0,
+	3, 0, 0, 18, 11, 0, 16, 60, 3, 1,
+	0, 1, 1, 0, 10, 10, 10, 10, 107, 3,
+	223, 1, 0, 0, 0, 0, 0, 0, 0, 0,
+	20, 15, 0, 0, 2,
 	/* T15 Object */
 	0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 	0,
@@ -291,7 +291,7 @@ static const u8 mxt_config_data_evt[] = {
 	0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 	0, 0, 0, 0,
 	/* T40 Object */
-	0, 0, 0, 0, 0,
+	17, 0, 0, 30, 30,
 	/* T42 Object */
 	3, 20, 45, 40, 128, 0, 0, 0,
 	/* T46 Object */
@@ -299,12 +299,12 @@ static const u8 mxt_config_data_evt[] = {
 	/* T47 Object */
 	0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 	/* T48 Object */
-	1, 12, 64, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 6, 6, 0, 0, 100, 4, 64,
-	10, 0, 20, 5, 0, 38, 0, 20, 0, 0,
+	1, 128, 96, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 6, 6, 0, 0, 63, 4, 64,
+	10, 0, 32, 5, 0, 38, 0, 8, 0, 0,
 	0, 0, 0, 0, 16, 65, 3, 1, 1, 0,
-	10, 10, 10, 0, 0, 15, 15, 154, 58, 145,
-	80, 100, 15, 3,
+	0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0,
 };
 
 static struct mxt_config_info mxt_config_array[] = {
@@ -607,8 +607,6 @@ static struct platform_device hs_pdev = {
 #define FT5X06_IRQ_GPIO		48
 #define FT5X06_RESET_GPIO	26
 
-#define FT5X16_IRQ_GPIO		122
-
 static ssize_t
 ft5x06_virtual_keys_register(struct kobject *kobj,
 			     struct kobj_attribute *attr,
@@ -619,17 +617,6 @@ ft5x06_virtual_keys_register(struct kobject *kobj,
 	":" __stringify(EV_KEY) ":" __stringify(KEY_HOME)   ":120:510:80:60"
 	":" __stringify(EV_KEY) ":" __stringify(KEY_SEARCH) ":200:510:80:60"
 	":" __stringify(EV_KEY) ":" __stringify(KEY_BACK)   ":280:510:80:60"
-	"\n");
-}
-
-static ssize_t ft5x16_virtual_keys_register(struct kobject *kobj,
-		struct kobj_attribute *attr, char *buf)
-{
-	return snprintf(buf, 200, \
-	__stringify(EV_KEY) ":" __stringify(KEY_HOME) ":68:984:135:50" \
-	":" __stringify(EV_KEY) ":" __stringify(KEY_MENU) ":203:984:135:50" \
-	":" __stringify(EV_KEY) ":" __stringify(KEY_BACK) ":338:984:135:50" \
-	":" __stringify(EV_KEY) ":" __stringify(KEY_SEARCH) ":473:984:135:50" \
 	"\n");
 }
 
@@ -671,28 +658,13 @@ static struct i2c_board_info ft5x06_device_info[] __initdata = {
 static void __init ft5x06_touchpad_setup(void)
 {
 	int rc;
-	int irq_gpio;
 
-	if (machine_is_qrd_skud_prime()) {
-		irq_gpio = FT5X16_IRQ_GPIO;
-
-		ft5x06_platformdata.x_max = 540;
-		ft5x06_platformdata.y_max = 960;
-		ft5x06_platformdata.irq_gpio = FT5X16_IRQ_GPIO;
-
-		ft5x06_device_info[0].irq = MSM_GPIO_TO_INT(FT5X16_IRQ_GPIO);
-
-		ft5x06_virtual_keys_attr.show = &ft5x16_virtual_keys_register;
-	} else {
-		irq_gpio = FT5X06_IRQ_GPIO;
-	}
-
-	rc = gpio_tlmm_config(GPIO_CFG(irq_gpio, 0,
+	rc = gpio_tlmm_config(GPIO_CFG(FT5X06_IRQ_GPIO, 0,
 			GPIO_CFG_INPUT, GPIO_CFG_PULL_UP,
 			GPIO_CFG_8MA), GPIO_CFG_ENABLE);
 	if (rc)
 		pr_err("%s: gpio_tlmm_config for %d failed\n",
-			__func__, irq_gpio);
+			__func__, FT5X06_IRQ_GPIO);
 
 	rc = gpio_tlmm_config(GPIO_CFG(FT5X06_RESET_GPIO, 0,
 			GPIO_CFG_OUTPUT, GPIO_CFG_PULL_DOWN,
@@ -726,15 +698,6 @@ static const unsigned short keymap_sku3[] = {
 	[KP_INDEX_SKU3(0, 1)] = KEY_VOLUMEDOWN,
 	[KP_INDEX_SKU3(1, 1)] = KEY_CAMERA,
 };
-
-static unsigned int kp_row_gpios_skud[] = {31, 32};
-static unsigned int kp_col_gpios_skud[] = {37};
-
-static const unsigned short keymap_skud[] = {
-	[KP_INDEX_SKU3(0, 0)] = KEY_VOLUMEUP,
-	[KP_INDEX_SKU3(0, 1)] = KEY_VOLUMEDOWN,
-};
-
 
 static struct gpio_event_matrix_info kp_matrix_info_sku3 = {
 	.info.func      = gpio_event_matrix_func,
@@ -859,7 +822,6 @@ void __init qrd7627a_add_io_devices(void)
 			mxt_config_array[0].config_length =
 					ARRAY_SIZE(mxt_config_data_evt);
 			mxt_platform_data.panel_maxy = 875;
-			mxt_platform_data.need_calibration = true;
 			mxt_vkey_setup();
 		}
 
@@ -882,14 +844,11 @@ void __init qrd7627a_add_io_devices(void)
 		i2c_register_board_info(MSM_GSBI1_QUP_I2C_BUS_ID,
 					mxt_device_info,
 					ARRAY_SIZE(mxt_device_info));
-	} else if (machine_is_msm7627a_qrd3() || machine_is_msm8625_qrd7()
-				|| machine_is_qrd_skud_prime()) {
+	} else if (machine_is_msm7627a_qrd3() || machine_is_msm8625_qrd7()) {
 		ft5x06_touchpad_setup();
 	}
 
-	/* headset and power key*/
-	/* ignore end key as this target doesn't need it */
-	hs_platform_data.ignore_end_key = true;
+	/* headset */
 	platform_device_register(&hs_pdev);
 
 	/* vibrator */
@@ -898,23 +857,13 @@ void __init qrd7627a_add_io_devices(void)
 #endif
 
 	/* keypad */
-
-	if (machine_is_qrd_skud_prime()) {
-		kp_matrix_info_sku3.keymap = keymap_skud;
-		kp_matrix_info_sku3.output_gpios = kp_row_gpios_skud;
-		kp_matrix_info_sku3.input_gpios = kp_col_gpios_skud;
-		kp_matrix_info_sku3.noutputs = ARRAY_SIZE(kp_row_gpios_skud);
-		kp_matrix_info_sku3.ninputs = ARRAY_SIZE(kp_col_gpios_skud);
-	}
-
 	if (machine_is_msm8625_evt())
 		kp_matrix_info_8625.keymap = keymap_8625_evt;
 
 	if (machine_is_msm7627a_evb() || machine_is_msm8625_evb() ||
 			machine_is_msm8625_evt())
 		platform_device_register(&kp_pdev_8625);
-	else if (machine_is_msm7627a_qrd3() || machine_is_msm8625_qrd7()
-		|| machine_is_qrd_skud_prime())
+	else if (machine_is_msm7627a_qrd3() || machine_is_msm8625_qrd7())
 		platform_device_register(&kp_pdev_sku3);
 
 	/* leds */

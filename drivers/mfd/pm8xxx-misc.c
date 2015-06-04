@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2013, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2011-2012, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -706,7 +706,8 @@ int pm8xxx_coincell_chg_config(struct pm8xxx_coincell_chg *chg_config)
 	voltage = chg_config->voltage;
 	resistor = chg_config->resistor;
 
-	if (resistor > PM8XXX_COINCELL_RESISTOR_800_OHMS) {
+	if (resistor < PM8XXX_COINCELL_RESISTOR_2100_OHMS ||
+			resistor > PM8XXX_COINCELL_RESISTOR_800_OHMS) {
 		pr_err("Invalid resistor value provided\n");
 		return -EINVAL;
 	}
@@ -1194,6 +1195,9 @@ int pm8xxx_hsed_bias_control(enum pm8xxx_hsed_bias bias, bool enable)
 }
 EXPORT_SYMBOL(pm8xxx_hsed_bias_control);
 
+#if defined (CONFIG_MACH_APQ8064_OMEGAR)
+extern int pmic_reset_irq;
+#endif
 static int __devinit pm8xxx_misc_probe(struct platform_device *pdev)
 {
 	const struct pm8xxx_misc_platform_data *pdata = pdev->dev.platform_data;
@@ -1244,6 +1248,11 @@ static int __devinit pm8xxx_misc_probe(struct platform_device *pdev)
 	spin_unlock_irqrestore(&pm8xxx_misc_chips_lock, flags);
 
 	platform_set_drvdata(pdev, chip);
+
+#if defined (CONFIG_MACH_APQ8064_OMEGAR)
+    disable_irq_nosync(pmic_reset_irq);
+	pm8xxx_hard_reset_config(PM8XXX_DISABLE_HARD_RESET);
+#endif
 
 	return rc;
 

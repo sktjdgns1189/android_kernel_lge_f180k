@@ -25,6 +25,11 @@
 #include "u_ether.h"
 #include "rndis.h"
 
+static bool rndis_multipacket_dl_disable;
+module_param(rndis_multipacket_dl_disable, bool, S_IRUGO|S_IWUSR);
+MODULE_PARM_DESC(rndis_multipacket_dl_disable,
+	"Disable RNDIS Multi-packet support in DownLink");
+
 /*
  * This function is an RNDIS Ethernet port -- a Microsoft protocol that's
  * been promoted instead of the standard CDC Ethernet.  The published RNDIS
@@ -65,16 +70,6 @@
  *
  *   - MS-Windows drivers sometimes emit undocumented requests.
  */
-
-static unsigned int rndis_dl_max_pkt_per_xfer = 3;
-module_param(rndis_dl_max_pkt_per_xfer, uint, S_IRUGO | S_IWUSR);
-MODULE_PARM_DESC(rndis_dl_max_pkt_per_xfer,
-	"Maximum packets per transfer for DL aggregation");
-
-static unsigned int rndis_ul_max_pkt_per_xfer = 3;
-module_param(rndis_ul_max_pkt_per_xfer, uint, S_IRUGO | S_IWUSR);
-MODULE_PARM_DESC(rndis_ul_max_pkt_per_xfer,
-	"Maximum packets per transfer for UL aggregation");
 
 struct f_rndis {
 	struct gether			port;
@@ -379,35 +374,13 @@ static struct sk_buff *rndis_add_header(struct gether *port,
 					struct sk_buff *skb)
 {
 	struct sk_buff *skb2;
-	struct rndis_packet_msg_type *header = NULL;
-	struct f_rndis *rndis = func_to_rndis(&port->func);
 
-	if (rndis->port.multi_pkt_xfer) {
-		if (port->header) {
-			header = port->header;
-			memset(header, 0, sizeof(*header));
-			header->MessageType = cpu_to_le32(REMOTE_NDIS_PACKET_MSG);
-			header->MessageLength = cpu_to_le32(skb->len +
-							sizeof(*header));
-			header->DataOffset = cpu_to_le32(36);
-			header->DataLength = cpu_to_le32(skb->len);
-			pr_debug("MessageLength:%d DataLength:%d\n",
-						header->MessageLength,
-						header->DataLength);
-			return skb;
-		} else {
-			pr_err("RNDIS header is NULL.\n");
-			return NULL;
-		}
-	} else {
-		skb2 = skb_realloc_headroom(skb,
-				sizeof(struct rndis_packet_msg_type));
-		if (skb2)
-			rndis_add_hdr(skb2);
+	skb2 = skb_realloc_headroom(skb, sizeof(struct rndis_packet_msg_type));
+	if (skb2)
+		rndis_add_hdr(skb2);
 
-		dev_kfree_skb_any(skb);
-		return skb2;
-	}
+	dev_kfree_skb_any(skb);
+	return skb2;
 }
 
 static void rndis_response_available(void *_rndis)
@@ -510,7 +483,7 @@ static void rndis_command_complete(struct usb_ep *ep, struct usb_request *req)
 				__func__, buf->MaxTransferSize,
 				rndis->port.multi_pkt_xfer ? "enabled" :
 							    "disabled");
-		if (rndis_dl_max_pkt_per_xfer <= 1)
+		if (rndis_multipacket_dl_disable)
 			rndis->port.multi_pkt_xfer = 0;
 	}
 //	spin_unlock(&dev->lock);
@@ -826,7 +799,6 @@ rndis_bind(struct usb_configuration *c, struct usb_function *f)
 
 	rndis_set_param_medium(rndis->config, NDIS_MEDIUM_802_3, 0);
 	rndis_set_host_mac(rndis->config, rndis->ethaddr);
-	rndis_set_max_pkt_xfer(rndis->config, rndis_ul_max_pkt_per_xfer);
 
 	if (rndis->manufacturer && rndis->vendorID &&
 			rndis_set_param_vendor(rndis->config, rndis->vendorID,
@@ -973,8 +945,6 @@ rndis_bind_config_vendor(struct usb_configuration *c, u8 ethaddr[ETH_ALEN],
 	rndis->port.header_len = sizeof(struct rndis_packet_msg_type);
 	rndis->port.wrap = rndis_add_header;
 	rndis->port.unwrap = rndis_rm_hdr;
-	rndis->port.ul_max_pkts_per_xfer = rndis_ul_max_pkt_per_xfer;
-	rndis->port.dl_max_pkts_per_xfer = rndis_dl_max_pkt_per_xfer;
 
 	rndis->port.func.name = "rndis";
 	rndis->port.func.strings = rndis_strings;

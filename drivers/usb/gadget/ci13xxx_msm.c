@@ -1,8 +1,14 @@
-/* Copyright (c) 2010-2014, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2010-2012, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
  * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
  */
 
 #include <linux/module.h>
@@ -14,9 +20,11 @@
 
 #include "ci13xxx_udc.c"
 
-#define MSM_USB_BASE	(udc->regs)
+#ifdef CONFIG_USB_G_LGE_ANDROID
+#include <linux/wakelock.h>
+#endif
 
-#define CI13XXX_MSM_MAX_LOG2_ITC	7
+#define MSM_USB_BASE	(udc->regs)
 
 struct ci13xxx_udc_context {
 	int irq;
@@ -24,9 +32,21 @@ struct ci13xxx_udc_context {
 	int wake_gpio;
 	int wake_irq;
 	bool wake_irq_state;
+#ifdef CONFIG_USB_G_LGE_ANDROID
+    struct wake_lock wlock;
+    struct delayed_work wunlock_w;
+#endif
 };
 
 static struct ci13xxx_udc_context _udc_ctxt;
+
+#ifdef CONFIG_USB_G_LGE_ANDROID
+#define UNLOCK_DELAY   msecs_to_jiffies(1000)
+static void wunlock_w(struct work_struct *w)
+{
+    wake_unlock(&_udc_ctxt.wlock);
+}
+#endif
 
 static irqreturn_t msm_udc_irq(int irq, void *data)
 {
@@ -57,114 +77,6 @@ static void ci13xxx_msm_resume(void)
 	}
 }
 
-static void ci13xxx_msm_disconnect(void)
-{
-	struct ci13xxx *udc = _udc;
-	struct usb_phy *phy = udc->transceiver;
-
-	if (phy && (phy->flags & ENABLE_DP_MANUAL_PULLUP)) {
-		u32 temp;
-
-		usb_phy_io_write(phy,
-				ULPI_MISC_A_VBUSVLDEXT |
-				ULPI_MISC_A_VBUSVLDEXTSEL,
-				ULPI_CLR(ULPI_MISC_A));
-
-		/* Notify LINK of VBUS LOW */
-		temp = readl_relaxed(USB_USBCMD);
-		temp &= ~USBCMD_SESS_VLD_CTRL;
-		writel_relaxed(temp, USB_USBCMD);
-
-		/*
-		 * Add memory barrier as it is must to complete
-		 * above USB PHY and Link register writes before
-		 * moving ahead with USB peripheral mode enumeration,
-		 * otherwise USB peripheral mode may not work.
-		 */
-		mb();
-	}
-}
-
-/* Link power management will reduce power consumption by
- * short time HW suspend/resume.
- */
-static void ci13xxx_msm_set_l1(struct ci13xxx *udc)
-{
-	int temp;
-	struct device *dev = udc->gadget.dev.parent;
-
-	dev_dbg(dev, "Enable link power management\n");
-
-	/* Enable remote wakeup and L1 for IN EPs */
-	writel_relaxed(0xffff0000, USB_L1_EP_CTRL);
-
-	temp = readl_relaxed(USB_L1_CONFIG);
-	temp |= L1_CONFIG_LPM_EN | L1_CONFIG_REMOTE_WAKEUP |
-		L1_CONFIG_GATE_SYS_CLK | L1_CONFIG_PHY_LPM |
-		L1_CONFIG_PLL;
-	writel_relaxed(temp, USB_L1_CONFIG);
-}
-
-static void ci13xxx_msm_connect(void)
-{
-	struct ci13xxx *udc = _udc;
-	struct usb_phy *phy = udc->transceiver;
-
-	if (phy && (phy->flags & ENABLE_DP_MANUAL_PULLUP)) {
-		int	temp;
-
-		usb_phy_io_write(phy,
-			ULPI_MISC_A_VBUSVLDEXT |
-			ULPI_MISC_A_VBUSVLDEXTSEL,
-			ULPI_SET(ULPI_MISC_A));
-
-		temp = readl_relaxed(USB_GENCONFIG2);
-		temp |= GENCFG2_SESS_VLD_CTRL_EN;
-		writel_relaxed(temp, USB_GENCONFIG2);
-
-		temp = readl_relaxed(USB_USBCMD);
-		temp |= USBCMD_SESS_VLD_CTRL;
-		writel_relaxed(temp, USB_USBCMD);
-
-		/*
-		 * Add memory barrier as it is must to complete
-		 * above USB PHY and Link register writes before
-		 * moving ahead with USB peripheral mode enumeration,
-		 * otherwise USB peripheral mode may not work.
-		 */
-		mb();
-	}
-}
-
-static void ci13xxx_msm_reset(void)
-{
-	struct ci13xxx *udc = _udc;
-	struct usb_phy *phy = udc->transceiver;
-	struct device *dev = udc->gadget.dev.parent;
-
-	writel_relaxed(0, USB_AHBBURST);
-	writel_relaxed(0x08, USB_AHBMODE);
-
-	if (udc->gadget.l1_supported)
-		ci13xxx_msm_set_l1(udc);
-
-	if (phy && (phy->flags & ENABLE_SECONDARY_PHY)) {
-		int	temp;
-
-		dev_dbg(dev, "using secondary hsphy\n");
-		temp = readl_relaxed(USB_PHY_CTRL2);
-		temp |= (1<<16);
-		writel_relaxed(temp, USB_PHY_CTRL2);
-
-		/*
-		 * Add memory barrier to make sure above LINK writes are
-		 * complete before moving ahead with USB peripheral mode
-		 * enumeration.
-		 */
-		mb();
-	}
-}
-
 static void ci13xxx_msm_notify_event(struct ci13xxx *udc, unsigned event)
 {
 	struct device *dev = udc->gadget.dev.parent;
@@ -172,16 +84,19 @@ static void ci13xxx_msm_notify_event(struct ci13xxx *udc, unsigned event)
 	switch (event) {
 	case CI13XXX_CONTROLLER_RESET_EVENT:
 		dev_info(dev, "CI13XXX_CONTROLLER_RESET_EVENT received\n");
-		ci13xxx_msm_reset();
+		writel(0, USB_AHBBURST);
+		writel_relaxed(0x08, USB_AHBMODE);
+#ifdef CONFIG_USB_G_LGE_ANDROID
+        cancel_delayed_work_sync(&_udc_ctxt.wunlock_w);
+        wake_lock(&_udc_ctxt.wlock);
+#endif
 		break;
 	case CI13XXX_CONTROLLER_DISCONNECT_EVENT:
 		dev_info(dev, "CI13XXX_CONTROLLER_DISCONNECT_EVENT received\n");
-		ci13xxx_msm_disconnect();
 		ci13xxx_msm_resume();
-		break;
-	case CI13XXX_CONTROLLER_CONNECT_EVENT:
-		dev_info(dev, "CI13XXX_CONTROLLER_CONNECT_EVENT received\n");
-		ci13xxx_msm_connect();
+#ifdef CONFIG_USB_G_LGE_ANDROID
+        schedule_delayed_work(&_udc_ctxt.wunlock_w, UNLOCK_DELAY);
+#endif
 		break;
 	case CI13XXX_CONTROLLER_SUSPEND_EVENT:
 		dev_info(dev, "CI13XXX_CONTROLLER_SUSPEND_EVENT received\n");
@@ -218,7 +133,7 @@ static struct ci13xxx_udc_driver ci13xxx_msm_udc_driver = {
 				  CI13XXX_ZERO_ITC |
 				  CI13XXX_DISABLE_STREAMING |
 				  CI13XXX_IS_OTG,
-	.nz_itc			= 0,
+
 	.notify_event		= ci13xxx_msm_notify_event,
 };
 
@@ -272,26 +187,8 @@ static int ci13xxx_msm_probe(struct platform_device *pdev)
 {
 	struct resource *res;
 	int ret;
-	struct ci13xxx_platform_data *pdata = pdev->dev.platform_data;
-	bool is_l1_supported = false;
 
 	dev_dbg(&pdev->dev, "ci13xxx_msm_probe\n");
-
-	if (pdata) {
-		/* Acceptable values for nz_itc are: 0,1,2,4,8,16,32,64 */
-		if (pdata->log2_itc > CI13XXX_MSM_MAX_LOG2_ITC ||
-			pdata->log2_itc <= 0)
-			ci13xxx_msm_udc_driver.nz_itc = 0;
-		else
-			ci13xxx_msm_udc_driver.nz_itc =
-				1 << (pdata->log2_itc-1);
-
-		is_l1_supported = pdata->l1_supported;
-		/* Set ahb2ahb bypass flag if it is requested. */
-		if (pdata->enable_ahb2ahb_bypass)
-			ci13xxx_msm_udc_driver.flags |=
-				CI13XXX_ENABLE_AHB2AHB_BYPASS;
-	}
 
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	if (!res) {
@@ -310,8 +207,6 @@ static int ci13xxx_msm_probe(struct platform_device *pdev)
 		dev_err(&pdev->dev, "udc_probe failed\n");
 		goto iounmap;
 	}
-
-	_udc->gadget.l1_supported = is_l1_supported;
 
 	_udc_ctxt.irq = platform_get_irq(pdev, 0);
 	if (_udc_ctxt.irq < 0) {
@@ -335,6 +230,11 @@ static int ci13xxx_msm_probe(struct platform_device *pdev)
 		dev_err(&pdev->dev, "request_irq failed\n");
 		goto gpio_uninstall;
 	}
+
+#ifdef CONFIG_USB_G_LGE_ANDROID
+    wake_lock_init(&_udc_ctxt.wlock, WAKE_LOCK_SUSPEND, "usb_bus_active");
+    INIT_DELAYED_WORK(&_udc_ctxt.wunlock_w, wunlock_w);
+#endif
 
 	pm_runtime_no_callbacks(&pdev->dev);
 	pm_runtime_enable(&pdev->dev);
@@ -366,24 +266,9 @@ void ci13xxx_msm_shutdown(struct platform_device *pdev)
 	ci13xxx_pullup(&_udc->gadget, 0);
 }
 
-void msm_hw_bam_disable(bool bam_disable)
-{
-	u32 val;
-	struct ci13xxx *udc = _udc;
-
-	if (bam_disable)
-		val = readl_relaxed(USB_GENCONFIG) | GENCONFIG_BAM_DISABLE;
-	else
-		val = readl_relaxed(USB_GENCONFIG) & ~GENCONFIG_BAM_DISABLE;
-
-	writel_relaxed(val, USB_GENCONFIG);
-}
-
 static struct platform_driver ci13xxx_msm_driver = {
 	.probe = ci13xxx_msm_probe,
-	.driver = {
-		.name = "msm_hsusb",
-	},
+	.driver = { .name = "msm_hsusb", },
 	.remove = ci13xxx_msm_remove,
 	.shutdown = ci13xxx_msm_shutdown,
 };

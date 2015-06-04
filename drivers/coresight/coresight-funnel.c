@@ -1,4 +1,4 @@
-/* Copyright (c) 2011-2013, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2011-2012, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -174,9 +174,6 @@ static int __devinit funnel_probe(struct platform_device *pdev)
 	struct resource *res;
 	struct coresight_desc *desc;
 
-	if (coresight_fuse_access_disabled())
-		return -EPERM;
-
 	if (pdev->dev.of_node) {
 		pdata = of_get_coresight_platform_data(dev, pdev->dev.of_node);
 		if (IS_ERR(pdata))
@@ -190,7 +187,7 @@ static int __devinit funnel_probe(struct platform_device *pdev)
 	drvdata->dev = &pdev->dev;
 	platform_set_drvdata(pdev, drvdata);
 
-	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "funnel-base");
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	if (!res)
 		return -ENODEV;
 

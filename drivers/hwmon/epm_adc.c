@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2013, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -65,8 +65,6 @@
 #define EPM_ADC_MILLI_VOLTS_SOURCE	4750
 #define EPM_ADC_SCALE_FACTOR		64
 #define GPIO_EPM_GLOBAL_ENABLE		86
-#define GPIO_EPM_MARKER1		85
-#define GPIO_EPM_MARKER2		96
 #define EPM_ADC_CONVERSION_TIME_MIN	50000
 #define EPM_ADC_CONVERSION_TIME_MAX	51000
 /* PSoc Commands */
@@ -94,32 +92,12 @@
 #define EPM_PSOC_CLEAR_BUFFER_RESPONSE_CMD		0x1e
 #define EPM_PSOC_SET_VADC_REFERENCE_CMD			0x1f
 #define EPM_PSOC_SET_VADC_REFERENCE_RESPONSE_CMD	0x20
-#define EPM_PSOC_PAUSE_CONVERSION			0x35
-#define EPM_PSOC_PAUSE_CONVERSION_RSP_CMD		0x36
-#define EPM_PSOC_UNPAUSE_CONVERSION			0x37
-#define EPM_PSOC_UNPAUSE_CONVERSION_RSP_CMD		0x38
-#define EPM_PSOC_GPIO_BUFFER_REQUEST_CMD		0x4f
-#define EPM_PSOC_GPIO_BUFFER_REQUEST_RESPONSE_CMD	0x50
-#define EPM_PSOC_GET_GPIO_BUFFER_CMD			0x51
-#define EPM_PSOC_GET_GPIO_BUFFER_RESPONSE_CMD		0x52
 
 #define EPM_PSOC_GLOBAL_ENABLE				81
 #define EPM_PSOC_VREF_VOLTAGE				2048
-#define EPM_PSOC_MAX_ADC_CODE_15_BIT			32767
-#define EPM_PSOC_MAX_ADC_CODE_12_BIT			4096
+#define EPM_PSOC_MAX_ADC_CODE_16_BIT			32767
 #define EPM_GLOBAL_ENABLE_MIN_DELAY			5000
 #define EPM_GLOBAL_ENABLE_MAX_DELAY			5100
-
-#define EPM_AVG_BUF_MASK1				0xfff00000
-#define EPM_AVG_BUF_MASK2				0xfff00
-#define EPM_AVG_BUF_MASK3				0xff
-#define EPM_AVG_BUF_MASK4				0xf0000000
-#define EPM_AVG_BUF_MASK5				0xfff0000
-#define EPM_AVG_BUF_MASK6				0xfff0
-#define EPM_AVG_BUF_MASK7				0xf
-#define EPM_AVG_BUF_MASK8				0xff000000
-#define EPM_AVG_BUF_MASK9				0xfff000
-#define EPM_AVG_BUF_MASK10				0xfff
 
 #define EPM_PSOC_BUFFERED_DATA_LENGTH			48
 #define EPM_PSOC_BUFFERED_DATA_LENGTH2			54
@@ -131,7 +109,6 @@ struct epm_adc_drv {
 	struct mutex			conv_lock;
 	uint32_t			bus_id;
 	struct miscdevice		misc;
-	uint32_t			channel_mask;
 	struct epm_chan_properties	epm_psoc_ch_prop[0];
 };
 
@@ -590,48 +567,21 @@ static int epm_adc_ads_scale_result(struct epm_adc_drv *epm_adc,
 			adc_scaled_data *= sign_bit;
 		}
 	}
-
 	conv->physical = (int32_t) adc_scaled_data;
 
 	return 0;
 }
 
-static int epm_psoc_scale_result(int16_t result, uint32_t index)
+static int epm_psoc_scale_result(uint16_t *adc_raw_data, uint32_t index)
 {
 	struct epm_adc_drv *epm_adc = epm_adc_drv;
-	int32_t result_cur, neg = 0;
-
-	if ((1 << index) & epm_adc->channel_mask) {
-		if (result & 0x800) {
-			neg = 1;
-			result = result & 0x7ff;
-		}
-		/* result = (2.048V * code)/(4096 * gain * rsense) */
-		result_cur = ((EPM_PSOC_VREF_VOLTAGE * result)/
-				EPM_PSOC_MAX_ADC_CODE_12_BIT);
-
-		result_cur = (result_cur/
-			(epm_adc->epm_psoc_ch_prop[index].gain *
-			epm_adc->epm_psoc_ch_prop[index].resistorvalue));
-		if (neg)
-			result_cur -= result_cur;
-	} else {
-		if (result & 0x8000) {
-			neg = 1;
-			result = result & 0x7fff;
-		}
-		/* result = (2.048V * code)/(32767 * gain * rsense) */
-		result_cur = (((EPM_PSOC_VREF_VOLTAGE * (int) result)/
-				EPM_PSOC_MAX_ADC_CODE_15_BIT) * 1000);
-
-		result_cur = (result_cur/
+	/* result = 2.048V/(32767 * gain * rsense) */
+	*adc_raw_data = (EPM_PSOC_VREF_VOLTAGE/EPM_PSOC_MAX_ADC_CODE_16_BIT)
+				* (*adc_raw_data);
+	*adc_raw_data = *adc_raw_data/
 		(epm_adc->epm_psoc_ch_prop[index].gain *
-			epm_adc->epm_psoc_ch_prop[index].resistorvalue));
-		if (neg)
-			result_cur -= result_cur;
-	}
-
-	return result_cur;
+			epm_adc->epm_psoc_ch_prop[index].resistorvalue);
+	return 0;
 }
 
 static int epm_adc_blocking_conversion(struct epm_adc_drv *epm_adc,
@@ -639,7 +589,7 @@ static int epm_adc_blocking_conversion(struct epm_adc_drv *epm_adc,
 {
 	struct epm_adc_platform_data *pdata = epm_adc->pdev->dev.platform_data;
 	int32_t channel_num = 0, mux_chan_idx = 0;
-	char adc_data[3];
+	char adc_data[3] = { 0 };
 	int rc = 0;
 
 	mutex_lock(&epm_adc->conv_lock);
@@ -725,130 +675,6 @@ static int epm_adc_psoc_gpio_init(bool enable)
 	return 0;
 }
 
-static int epm_set_marker1(struct epm_marker_level *marker_init)
-{
-	int rc = 0;
-
-	rc = gpio_request(GPIO_EPM_MARKER1, "EPM_MARKER1");
-	if (!rc) {
-		gpio_direction_output(GPIO_EPM_MARKER1, 1);
-	} else {
-		pr_err("%s: Configure MARKER1 GPIO Failed\n",
-							__func__);
-		return rc;
-	}
-
-	gpio_set_value(GPIO_EPM_MARKER1, marker_init->level);
-
-	return 0;
-}
-
-static int epm_set_marker2(struct epm_marker_level *marker_init)
-{
-	int rc = 0;
-
-	rc = gpio_request(GPIO_EPM_MARKER2, "EPM_MARKER2");
-	if (!rc) {
-		gpio_direction_output(GPIO_EPM_MARKER2, 1);
-	} else {
-		pr_err("%s: Configure MARKER2 GPIO Failed\n",
-							__func__);
-		return rc;
-	}
-
-	gpio_set_value(GPIO_EPM_MARKER2, marker_init->level);
-
-	return 0;
-}
-
-static int epm_marker1_release(void)
-{
-	gpio_free(GPIO_EPM_MARKER1);
-
-	return 0;
-}
-
-static int epm_marker2_release(void)
-{
-	gpio_free(GPIO_EPM_MARKER2);
-
-	return 0;
-}
-
-static int epm_psoc_pause_conversion(struct epm_adc_drv *epm_adc)
-{
-	struct spi_message m;
-	struct spi_transfer t;
-	char tx_buf[2], rx_buf[2];
-	int rc = 0;
-
-	spi_setup(epm_adc->epm_spi_client);
-
-	memset(&t, 0, sizeof t);
-	memset(tx_buf, 0, sizeof tx_buf);
-	memset(rx_buf, 0, sizeof tx_buf);
-	t.tx_buf = tx_buf;
-	t.rx_buf = rx_buf;
-	spi_message_init(&m);
-	spi_message_add_tail(&t, &m);
-
-	tx_buf[0] = EPM_PSOC_PAUSE_CONVERSION;
-
-	t.len = sizeof(tx_buf);
-	t.bits_per_word = EPM_ADC_ADS_SPI_BITS_PER_WORD;
-
-	rc = spi_sync(epm_adc->epm_spi_client, &m);
-	if (rc) {
-		pr_err("spi sync err with %d\n", rc);
-		return rc;
-	}
-
-	rc = spi_sync(epm_adc->epm_spi_client, &m);
-	if (rc) {
-		pr_err("spi sync err with %d\n", rc);
-		return rc;
-	}
-
-	return rx_buf[0];
-}
-
-static int epm_psoc_unpause_conversion(struct epm_adc_drv *epm_adc)
-{
-	struct spi_message m;
-	struct spi_transfer t;
-	char tx_buf[2], rx_buf[2];
-	int rc = 0;
-
-	spi_setup(epm_adc->epm_spi_client);
-
-	memset(&t, 0, sizeof t);
-	memset(tx_buf, 0, sizeof tx_buf);
-	memset(rx_buf, 0, sizeof tx_buf);
-	t.tx_buf = tx_buf;
-	t.rx_buf = rx_buf;
-	spi_message_init(&m);
-	spi_message_add_tail(&t, &m);
-
-	tx_buf[0] = EPM_PSOC_UNPAUSE_CONVERSION;
-
-	t.len = sizeof(tx_buf);
-	t.bits_per_word = EPM_ADC_ADS_SPI_BITS_PER_WORD;
-
-	rc = spi_sync(epm_adc->epm_spi_client, &m);
-	if (rc) {
-		pr_err("spi sync err with %d\n", rc);
-		return rc;
-	}
-
-	rc = spi_sync(epm_adc->epm_spi_client, &m);
-	if (rc) {
-		pr_err("spi sync err with %d\n", rc);
-		return rc;
-	}
-
-	return rx_buf[0];
-}
-
 static int epm_psoc_init(struct epm_adc_drv *epm_adc,
 					struct epm_psoc_init_resp *init_resp)
 {
@@ -876,9 +702,6 @@ static int epm_psoc_init(struct epm_adc_drv *epm_adc,
 	if (rc)
 		return rc;
 
-	rc = spi_sync(epm_adc->epm_spi_client, &m);
-	if (rc)
-		return rc;
 	init_resp->cmd			= rx_buf[0];
 	init_resp->version		= rx_buf[1];
 	init_resp->compatible_ver	= rx_buf[2];
@@ -887,12 +710,6 @@ static int epm_psoc_init(struct epm_adc_drv *epm_adc,
 	init_resp->firm_ver[2]		= rx_buf[5];
 	init_resp->num_dev		= rx_buf[6];
 	init_resp->num_channel		= rx_buf[7];
-
-	pr_debug("EPM PSOC response for hello command: resp_cmd:0x%x\n",
-							rx_buf[0]);
-	pr_debug("EPM PSOC version:0x%x\n", rx_buf[1]);
-	pr_debug("EPM PSOC firmware version:0x%x\n",
-			rx_buf[6] | rx_buf[5] | rx_buf[4] | rx_buf[3]);
 
 	return rc;
 }
@@ -940,6 +757,7 @@ static int epm_psoc_channel_configure(struct epm_adc_drv *epm_adc,
 	chan_num = rx_buf[2] << 24 | (rx_buf[3] << 16) | (rx_buf[4] << 8) |
 						rx_buf[5];
 	psoc_chan_configure->channel_num	= chan_num;
+	pr_debug("dev_num:%d, chan_num:%d\n", rx_buf[1], chan_num);
 
 	return rc;
 }
@@ -1021,8 +839,10 @@ static int epm_psoc_get_data(struct epm_adc_drv *epm_adc,
 	psoc_get_meas->timestamp_resp_value = (rx_buf[3] << 24) |
 			(rx_buf[4] << 16) | (rx_buf[5] << 8) |
 			rx_buf[6];
-	psoc_get_meas->reading_raw = (rx_buf[7] << 8) | rx_buf[8];
+	psoc_get_meas->reading_value = (rx_buf[7] << 8) | rx_buf[8];
 
+	pr_debug("dev_num:%d, chan_num:%d\n", rx_buf[1], rx_buf[2]);
+	pr_debug("data %d\n", psoc_get_meas->reading_value);
 	return rc;
 }
 
@@ -1077,7 +897,7 @@ static int epm_psoc_get_buffered_data(struct epm_adc_drv *epm_adc,
 	return rc;
 }
 
-static int epm_psoc_get_timestamp(struct epm_adc_drv *epm_adc,
+static int epm_psoc_timestamp(struct epm_adc_drv *epm_adc,
 		struct epm_psoc_system_time_stamp *psoc_timestamp)
 {
 	struct spi_message m;
@@ -1095,51 +915,15 @@ static int epm_psoc_get_timestamp(struct epm_adc_drv *epm_adc,
 	spi_message_init(&m);
 	spi_message_add_tail(&t, &m);
 
-	psoc_timestamp->cmd = EPM_PSOC_GET_SYSTEM_TIMESTAMP_CMD;
-	tx_buf[0] = psoc_timestamp->cmd;
-
-	t.len = sizeof(tx_buf);
-	t.bits_per_word = EPM_ADC_ADS_SPI_BITS_PER_WORD;
-
-	rc = spi_sync(epm_adc->epm_spi_client, &m);
-	if (rc)
-		return rc;
-
-	rc = spi_sync(epm_adc->epm_spi_client, &m);
-	if (rc)
-		return rc;
-
-	psoc_timestamp->cmd		= rx_buf[0];
-	psoc_timestamp->timestamp = rx_buf[1] << 24 | rx_buf[2] << 16 |
-					rx_buf[3] << 8 | rx_buf[4];
-
-	return rc;
-}
-
-static int epm_psoc_set_timestamp(struct epm_adc_drv *epm_adc,
-		struct epm_psoc_system_time_stamp *psoc_timestamp)
-{
-	struct spi_message m;
-	struct spi_transfer t;
-	char tx_buf[10], rx_buf[10];
-	int rc = 0;
-
-	spi_setup(epm_adc->epm_spi_client);
-
-	memset(&t, 0, sizeof t);
-	memset(tx_buf, 0, sizeof tx_buf);
-	memset(rx_buf, 0, sizeof tx_buf);
-	t.tx_buf = tx_buf;
-	t.rx_buf = rx_buf;
-	spi_message_init(&m);
-	spi_message_add_tail(&t, &m);
-
-	psoc_timestamp->cmd = EPM_PSOC_SET_SYSTEM_TIMESTAMP_CMD;
-	tx_buf[0] = psoc_timestamp->cmd;
-	tx_buf[1] = (psoc_timestamp->timestamp >> 24) & 0xff;
-	tx_buf[2] = (psoc_timestamp->timestamp >> 16) & 0xff;
-	tx_buf[3] = (psoc_timestamp->timestamp >> 8) & 0xff;
-	tx_buf[4] = (psoc_timestamp->timestamp & 0xff);
+	if (psoc_timestamp->cmd == EPM_PSOC_SET_SYSTEM_TIMESTAMP_CMD) {
+		tx_buf[0] = psoc_timestamp->cmd;
+		tx_buf[1] = (psoc_timestamp->timestamp & 0xff000000) >> 24;
+		tx_buf[2] = (psoc_timestamp->timestamp & 0xff0000) >> 16;
+		tx_buf[3] = (psoc_timestamp->timestamp & 0xff00) >> 8;
+		tx_buf[4] = (psoc_timestamp->timestamp & 0xff);
+	} else if (psoc_timestamp->cmd == EPM_PSOC_GET_SYSTEM_TIMESTAMP_CMD) {
+		tx_buf[0] = psoc_timestamp->cmd;
+	}
 
 	t.len = sizeof(tx_buf);
 	t.bits_per_word = EPM_ADC_ADS_SPI_BITS_PER_WORD;
@@ -1165,7 +949,7 @@ static int epm_psoc_get_avg_buffered_switch_data(struct epm_adc_drv *epm_adc,
 	struct spi_message m;
 	struct spi_transfer t;
 	char tx_buf[64], rx_buf[64];
-	int rc = 0, i = 0, j = 0, z = 0;
+	int rc = 0, i;
 
 	spi_setup(epm_adc->epm_spi_client);
 
@@ -1201,57 +985,6 @@ static int epm_psoc_get_avg_buffered_switch_data(struct epm_adc_drv *epm_adc,
 
 	for (i = 0; i < EPM_PSOC_BUFFERED_DATA_LENGTH2; i++)
 		psoc_get_meas->avg_data[i] = rx_buf[10 + i];
-
-	i = j = 0;
-	for (z = 0; z < 4; z++) {
-		psoc_get_meas->data[i].channel = i;
-		psoc_get_meas->data[i].avg_buffer_sample =
-				rx_buf[10 + j] & EPM_AVG_BUF_MASK1;
-		i++;
-		j++;
-		psoc_get_meas->data[i].avg_buffer_sample =
-			rx_buf[10 + j] & EPM_AVG_BUF_MASK2;
-		i++;
-		j++;
-		psoc_get_meas->data[i].avg_buffer_sample =
-				rx_buf[10 + j] & EPM_AVG_BUF_MASK3;
-		psoc_get_meas->data[i].avg_buffer_sample <<= 8;
-		j++;
-		psoc_get_meas->data[i].avg_buffer_sample =
-		psoc_get_meas->data[i].avg_buffer_sample |
-				(rx_buf[10 + j] & EPM_AVG_BUF_MASK4);
-		i++;
-		j++;
-		psoc_get_meas->data[i].avg_buffer_sample =
-				rx_buf[10 + j] & EPM_AVG_BUF_MASK5;
-		i++;
-		j++;
-		psoc_get_meas->data[i].avg_buffer_sample =
-				rx_buf[10 + j] & EPM_AVG_BUF_MASK6;
-		i++;
-		j++;
-		psoc_get_meas->data[i].avg_buffer_sample =
-				rx_buf[10 + j] & EPM_AVG_BUF_MASK7;
-		psoc_get_meas->data[i].avg_buffer_sample <<= 4;
-		j++;
-		psoc_get_meas->data[i].avg_buffer_sample =
-		psoc_get_meas->data[i].avg_buffer_sample |
-				(rx_buf[10 + j] & EPM_AVG_BUF_MASK8);
-		i++;
-		j++;
-		psoc_get_meas->data[i].avg_buffer_sample =
-				rx_buf[10 + j] & EPM_AVG_BUF_MASK9;
-		i++;
-		j++;
-		psoc_get_meas->data[i].avg_buffer_sample =
-				rx_buf[10 + j] & EPM_AVG_BUF_MASK10;
-	}
-
-	for (z = 0; z < 32; z++) {
-		if (psoc_get_meas->data[z].avg_buffer_sample != 0)
-			psoc_get_meas->data[z].result = epm_psoc_scale_result(
-				psoc_get_meas->data[z].avg_buffer_sample, z);
-	}
 
 	return rc;
 }
@@ -1375,85 +1108,7 @@ static int epm_psoc_clear_buffer(struct epm_adc_drv *epm_adc)
 	if (rc)
 		return rc;
 
-	rc = rx_buf[1];
-
-	return rc;
-}
-
-static int epm_psoc_get_gpio_buffer_data(struct epm_adc_drv *epm_adc,
-			struct epm_get_gpio_buffer_resp *gpio_resp_pkt)
-{
-	struct spi_message m;
-	struct spi_transfer t;
-	char tx_buf[7], rx_buf[7];
-	int rc = 0;
-
-	spi_setup(epm_adc->epm_spi_client);
-
-	memset(&t, 0, sizeof t);
-	memset(tx_buf, 0, sizeof tx_buf);
-	memset(rx_buf, 0, sizeof tx_buf);
-	t.tx_buf = tx_buf;
-	t.rx_buf = rx_buf;
-	spi_message_init(&m);
-	spi_message_add_tail(&t, &m);
-
-	tx_buf[0] = EPM_PSOC_GET_GPIO_BUFFER_CMD;
-
-	t.len = sizeof(tx_buf);
-	t.bits_per_word = EPM_ADC_ADS_SPI_BITS_PER_WORD;
-
-	rc = spi_sync(epm_adc->epm_spi_client, &m);
-	if (rc)
-		return rc;
-
-	rc = spi_sync(epm_adc->epm_spi_client, &m);
-	if (rc)
-		return rc;
-
-	gpio_resp_pkt->cmd = rx_buf[0];
-	gpio_resp_pkt->status = rx_buf[1];
-	gpio_resp_pkt->bitmask_monitor_pin = rx_buf[2];
-	gpio_resp_pkt->timestamp = rx_buf[3] << 24 | rx_buf[4] << 16 |
-					rx_buf[5] << 8 | tx_buf[6];
-
-	return rc;
-}
-
-static int epm_psoc_gpio_buffer_request_configure(struct epm_adc_drv *epm_adc,
-			struct epm_gpio_buffer_request *gpio_request)
-{
-	struct spi_message m;
-	struct spi_transfer t;
-	char tx_buf[2], rx_buf[2];
-	int rc = 0;
-
-	spi_setup(epm_adc->epm_spi_client);
-
-	memset(&t, 0, sizeof t);
-	memset(tx_buf, 0, sizeof tx_buf);
-	memset(rx_buf, 0, sizeof tx_buf);
-	t.tx_buf = tx_buf;
-	t.rx_buf = rx_buf;
-	spi_message_init(&m);
-	spi_message_add_tail(&t, &m);
-
-	tx_buf[0] = EPM_PSOC_GPIO_BUFFER_REQUEST_CMD;
-	tx_buf[1] = gpio_request->bitmask_monitor_pin;
-
-	t.len = sizeof(tx_buf);
-	t.bits_per_word = EPM_ADC_ADS_SPI_BITS_PER_WORD;
-
-	rc = spi_sync(epm_adc->epm_spi_client, &m);
-	if (rc)
-		return rc;
-
-	rc = spi_sync(epm_adc->epm_spi_client, &m);
-	if (rc)
-		return rc;
-
-	gpio_request->cmd = rx_buf[0];
-	gpio_request->status = rx_buf[1];
+	rc = rx_buf[2];
 
 	return rc;
 }
@@ -1514,58 +1169,6 @@ static long epm_adc_ioctl(struct file *file, unsigned int cmd,
 				return -EFAULT;
 			break;
 		}
-	case EPM_MARKER1_REQUEST:
-		{
-			struct epm_marker_level marker_init;
-			uint32_t result;
-
-			if (copy_from_user(&marker_init, (void __user *)arg,
-					sizeof(struct epm_marker_level)))
-				return -EFAULT;
-
-			result = epm_set_marker1(&marker_init);
-
-			if (copy_to_user((void __user *)arg, &result,
-						sizeof(uint32_t)))
-				return -EFAULT;
-			break;
-		}
-	case EPM_MARKER2_REQUEST:
-		{
-			struct epm_marker_level marker_init;
-			uint32_t result;
-
-			if (copy_from_user(&marker_init, (void __user *)arg,
-					sizeof(struct epm_marker_level)))
-				return -EFAULT;
-
-			result = epm_set_marker2(&marker_init);
-
-			if (copy_to_user((void __user *)arg, &result,
-						sizeof(uint32_t)))
-				return -EFAULT;
-			break;
-		}
-	case EPM_MARKER1_RELEASE:
-		{
-			uint32_t result;
-			result = epm_marker1_release();
-
-			if (copy_to_user((void __user *)arg, &result,
-						sizeof(uint32_t)))
-				return -EFAULT;
-			break;
-		}
-	case EPM_MARKER2_RELEASE:
-		{
-			uint32_t result;
-			result = epm_marker2_release();
-
-			if (copy_to_user((void __user *)arg, &result,
-						sizeof(uint32_t)))
-				return -EFAULT;
-			break;
-		}
 	case EPM_PSOC_ADC_INIT:
 		{
 			struct epm_psoc_init_resp psoc_init;
@@ -1582,26 +1185,8 @@ static long epm_adc_ioctl(struct file *file, unsigned int cmd,
 				return -EINVAL;
 			}
 
-			if (!rc) {
-				rc = epm_adc_psoc_gpio_init(true);
-				if (rc) {
-					pr_err("GPIO init failed\n");
-					return -EINVAL;
-				}
-			}
-
 			if (copy_to_user((void __user *)arg, &psoc_init,
 				sizeof(struct epm_psoc_init_resp)))
-				return -EFAULT;
-			break;
-		}
-	case EPM_PSOC_ADC_DEINIT:
-		{
-			uint32_t result;
-			result = epm_adc_psoc_gpio_init(false);
-
-			if (copy_to_user((void __user *)arg, &result,
-						sizeof(uint32_t)))
 				return -EFAULT;
 			break;
 		}
@@ -1669,10 +1254,6 @@ static long epm_adc_ioctl(struct file *file, unsigned int cmd,
 				return -EINVAL;
 			}
 
-			psoc_get_data.reading_value = epm_psoc_scale_result(
-				psoc_get_data.reading_raw,
-				psoc_get_data.chan_num);
-
 			if (copy_to_user((void __user *)arg, &psoc_get_data,
 				sizeof(struct epm_psoc_get_data)))
 				return -EFAULT;
@@ -1702,26 +1283,6 @@ static long epm_adc_ioctl(struct file *file, unsigned int cmd,
 			break;
 		}
 	case EPM_PSOC_ADC_GET_SYSTEM_TIMESTAMP:
-		{
-			struct epm_psoc_system_time_stamp psoc_timestamp;
-			int rc;
-
-			if (copy_from_user(&psoc_timestamp,
-				(void __user *)arg,
-				sizeof(struct epm_psoc_system_time_stamp)))
-				return -EFAULT;
-
-			rc = epm_psoc_get_timestamp(epm_adc, &psoc_timestamp);
-			if (rc) {
-				pr_err("PSOC get timestamp failed\n");
-				return -EINVAL;
-			}
-
-			if (copy_to_user((void __user *)arg, &psoc_timestamp,
-				sizeof(struct epm_psoc_system_time_stamp)))
-				return -EFAULT;
-			break;
-		}
 	case EPM_PSOC_ADC_SET_SYSTEM_TIMESTAMP:
 		{
 			struct epm_psoc_system_time_stamp psoc_timestamp;
@@ -1732,9 +1293,9 @@ static long epm_adc_ioctl(struct file *file, unsigned int cmd,
 				sizeof(struct epm_psoc_system_time_stamp)))
 				return -EFAULT;
 
-			rc = epm_psoc_set_timestamp(epm_adc, &psoc_timestamp);
+			rc = epm_psoc_timestamp(epm_adc, &psoc_timestamp);
 			if (rc) {
-				pr_err("PSOC set timestamp failed\n");
+				pr_err("PSOC buffered measurement failed\n");
 				return -EINVAL;
 			}
 
@@ -1827,70 +1388,6 @@ static long epm_adc_ioctl(struct file *file, unsigned int cmd,
 				return -EFAULT;
 			break;
 		}
-	case EPM_PSOC_GPIO_BUFFER_REQUEST:
-		{
-			struct epm_gpio_buffer_request gpio_request;
-			int rc;
-
-			if (copy_from_user(&gpio_request,
-					(void __user *)arg,
-					sizeof(struct epm_gpio_buffer_request)))
-				return -EFAULT;
-
-			rc = epm_psoc_gpio_buffer_request_configure(epm_adc,
-							&gpio_request);
-			if (rc) {
-				pr_err("PSOC buffer request failed\n");
-				return -EINVAL;
-			}
-
-			if (copy_to_user((void __user *)arg, &gpio_request,
-				sizeof(struct epm_gpio_buffer_request)))
-				return -EFAULT;
-			break;
-		}
-	case EPM_PSOC_GET_GPIO_BUFFER_DATA:
-		{
-			struct epm_get_gpio_buffer_resp gpio_resp_pkt;
-			int rc;
-
-			if (copy_from_user(&gpio_resp_pkt,
-				(void __user *)arg,
-				sizeof(struct epm_get_gpio_buffer_resp)))
-				return -EFAULT;
-
-			rc = epm_psoc_get_gpio_buffer_data(epm_adc,
-							&gpio_resp_pkt);
-			if (rc) {
-				pr_err("PSOC get buffer data failed\n");
-				return -EINVAL;
-			}
-
-			if (copy_to_user((void __user *)arg, &gpio_resp_pkt,
-				sizeof(struct epm_get_gpio_buffer_resp)))
-				return -EFAULT;
-			break;
-		}
-	case EPM_PSOC_PAUSE_CONVERSION_REQUEST:
-		{
-			uint32_t result;
-			result = epm_psoc_pause_conversion(epm_adc);
-
-			if (copy_to_user((void __user *)arg, &result,
-						sizeof(uint32_t)))
-				return -EFAULT;
-			break;
-		}
-	case EPM_PSOC_UNPAUSE_CONVERSION_REQUEST:
-		{
-			uint32_t result;
-			result = epm_psoc_unpause_conversion(epm_adc);
-
-			if (copy_to_user((void __user *)arg, &result,
-						sizeof(uint32_t)))
-				return -EFAULT;
-			break;
-		}
 	default:
 		return -EINVAL;
 	}
@@ -1910,6 +1407,7 @@ static ssize_t epm_adc_psoc_show_in(struct device *dev,
 	struct epm_psoc_init_resp init_resp;
 	struct epm_psoc_channel_configure psoc_chan_configure;
 	struct epm_psoc_get_data psoc_get_meas;
+	int16_t *adc_code = 0;
 	int rc = 0;
 
 	rc = epm_adc_psoc_gpio_init(true);
@@ -1923,16 +1421,15 @@ static ssize_t epm_adc_psoc_show_in(struct device *dev,
 	init_resp.cmd = EPM_PSOC_INIT_CMD;
 	rc = epm_psoc_init(epm_adc, &init_resp);
 	if (rc) {
-		pr_err("PSOC init failed %d\n", rc);
+		pr_info("PSOC init failed %d\n", rc);
 		return 0;
 	}
-
 
 	psoc_chan_configure.channel_num = (1 << attr->index);
 	psoc_chan_configure.cmd = EPM_PSOC_CHANNEL_ENABLE_DISABLE_CMD;
 	rc = epm_psoc_channel_configure(epm_adc, &psoc_chan_configure);
 	if (rc) {
-		pr_err("PSOC channel configure failed\n");
+		pr_info("PSOC channel configure failed\n");
 		return 0;
 	}
 
@@ -1944,13 +1441,20 @@ static ssize_t epm_adc_psoc_show_in(struct device *dev,
 	psoc_get_meas.chan_num = attr->index;
 	rc = epm_psoc_get_data(epm_adc, &psoc_get_meas);
 	if (rc) {
-		pr_err("PSOC get data failed\n");
+		pr_info("PSOC get data failed\n");
 		return 0;
 	}
 
-	psoc_get_meas.reading_value = epm_psoc_scale_result(
-			psoc_get_meas.reading_value,
-			attr->index);
+	*adc_code = psoc_get_meas.reading_value;
+
+	rc = epm_psoc_scale_result(adc_code,
+			psoc_chan_configure.channel_num);
+	if (rc) {
+		pr_info("Scale result failed\n");
+		return 0;
+	}
+
+	psoc_get_meas.reading_value = *adc_code;
 
 	rc = epm_adc_psoc_gpio_init(false);
 	if (rc) {
@@ -1962,44 +1466,44 @@ static ssize_t epm_adc_psoc_show_in(struct device *dev,
 }
 
 static struct sensor_device_attribute epm_adc_psoc_in_attrs[] = {
-	SENSOR_ATTR(psoc0_chan0,  S_IRUGO, epm_adc_psoc_show_in, NULL, 0),
-	SENSOR_ATTR(psoc0_chan1,  S_IRUGO, epm_adc_psoc_show_in, NULL, 1),
-	SENSOR_ATTR(psoc0_chan2,  S_IRUGO, epm_adc_psoc_show_in, NULL, 2),
-	SENSOR_ATTR(psoc0_chan3,  S_IRUGO, epm_adc_psoc_show_in, NULL, 3),
-	SENSOR_ATTR(psoc0_chan4,  S_IRUGO, epm_adc_psoc_show_in, NULL, 4),
-	SENSOR_ATTR(psoc0_chan5,  S_IRUGO, epm_adc_psoc_show_in, NULL, 5),
-	SENSOR_ATTR(psoc0_chan6,  S_IRUGO, epm_adc_psoc_show_in, NULL, 6),
-	SENSOR_ATTR(psoc0_chan7,  S_IRUGO, epm_adc_psoc_show_in, NULL, 7),
-	SENSOR_ATTR(psoc0_chan8,  S_IRUGO, epm_adc_psoc_show_in, NULL, 8),
-	SENSOR_ATTR(psoc0_chan9,  S_IRUGO, epm_adc_psoc_show_in, NULL, 9),
-	SENSOR_ATTR(psoc0_chan10, S_IRUGO, epm_adc_psoc_show_in, NULL, 10),
-	SENSOR_ATTR(psoc0_chan11, S_IRUGO, epm_adc_psoc_show_in, NULL, 11),
-	SENSOR_ATTR(psoc0_chan12, S_IRUGO, epm_adc_psoc_show_in, NULL, 12),
-	SENSOR_ATTR(psoc0_chan13, S_IRUGO, epm_adc_psoc_show_in, NULL, 13),
-	SENSOR_ATTR(psoc0_chan14, S_IRUGO, epm_adc_psoc_show_in, NULL, 14),
-	SENSOR_ATTR(psoc0_chan15, S_IRUGO, epm_adc_psoc_show_in, NULL, 15),
-	SENSOR_ATTR(psoc0_chan16,  S_IRUGO, epm_adc_psoc_show_in, NULL, 16),
-	SENSOR_ATTR(psoc0_chan17,  S_IRUGO, epm_adc_psoc_show_in, NULL, 17),
-	SENSOR_ATTR(psoc0_chan18,  S_IRUGO, epm_adc_psoc_show_in, NULL, 18),
-	SENSOR_ATTR(psoc0_chan19,  S_IRUGO, epm_adc_psoc_show_in, NULL, 19),
-	SENSOR_ATTR(psoc0_chan20,  S_IRUGO, epm_adc_psoc_show_in, NULL, 20),
-	SENSOR_ATTR(psoc0_chan21,  S_IRUGO, epm_adc_psoc_show_in, NULL, 21),
-	SENSOR_ATTR(psoc0_chan22,  S_IRUGO, epm_adc_psoc_show_in, NULL, 22),
-	SENSOR_ATTR(psoc0_chan23,  S_IRUGO, epm_adc_psoc_show_in, NULL, 23),
-	SENSOR_ATTR(psoc0_chan24,  S_IRUGO, epm_adc_psoc_show_in, NULL, 24),
-	SENSOR_ATTR(psoc0_chan25,  S_IRUGO, epm_adc_psoc_show_in, NULL, 25),
-	SENSOR_ATTR(psoc0_chan26, S_IRUGO, epm_adc_psoc_show_in, NULL, 26),
-	SENSOR_ATTR(psoc0_chan27, S_IRUGO, epm_adc_psoc_show_in, NULL, 27),
-	SENSOR_ATTR(psoc0_chan28, S_IRUGO, epm_adc_psoc_show_in, NULL, 28),
-	SENSOR_ATTR(psoc0_chan29, S_IRUGO, epm_adc_psoc_show_in, NULL, 29),
-	SENSOR_ATTR(psoc0_chan30, S_IRUGO, epm_adc_psoc_show_in, NULL, 30),
-	SENSOR_ATTR(psoc0_chan31, S_IRUGO, epm_adc_psoc_show_in, NULL, 31),
+	SENSOR_ATTR(ads0_chan0,  S_IRUGO, epm_adc_psoc_show_in, NULL, 0),
+	SENSOR_ATTR(ads0_chan1,  S_IRUGO, epm_adc_psoc_show_in, NULL, 1),
+	SENSOR_ATTR(ads0_chan2,  S_IRUGO, epm_adc_psoc_show_in, NULL, 2),
+	SENSOR_ATTR(ads0_chan3,  S_IRUGO, epm_adc_psoc_show_in, NULL, 3),
+	SENSOR_ATTR(ads0_chan4,  S_IRUGO, epm_adc_psoc_show_in, NULL, 4),
+	SENSOR_ATTR(ads0_chan5,  S_IRUGO, epm_adc_psoc_show_in, NULL, 5),
+	SENSOR_ATTR(ads0_chan6,  S_IRUGO, epm_adc_psoc_show_in, NULL, 6),
+	SENSOR_ATTR(ads0_chan7,  S_IRUGO, epm_adc_psoc_show_in, NULL, 7),
+	SENSOR_ATTR(ads0_chan8,  S_IRUGO, epm_adc_psoc_show_in, NULL, 8),
+	SENSOR_ATTR(ads0_chan9,  S_IRUGO, epm_adc_psoc_show_in, NULL, 9),
+	SENSOR_ATTR(ads0_chan10, S_IRUGO, epm_adc_psoc_show_in, NULL, 10),
+	SENSOR_ATTR(ads0_chan11, S_IRUGO, epm_adc_psoc_show_in, NULL, 11),
+	SENSOR_ATTR(ads0_chan12, S_IRUGO, epm_adc_psoc_show_in, NULL, 12),
+	SENSOR_ATTR(ads0_chan13, S_IRUGO, epm_adc_psoc_show_in, NULL, 13),
+	SENSOR_ATTR(ads0_chan14, S_IRUGO, epm_adc_psoc_show_in, NULL, 14),
+	SENSOR_ATTR(ads0_chan15, S_IRUGO, epm_adc_psoc_show_in, NULL, 15),
+	SENSOR_ATTR(ads1_chan0,  S_IRUGO, epm_adc_psoc_show_in, NULL, 16),
+	SENSOR_ATTR(ads1_chan1,  S_IRUGO, epm_adc_psoc_show_in, NULL, 17),
+	SENSOR_ATTR(ads1_chan2,  S_IRUGO, epm_adc_psoc_show_in, NULL, 18),
+	SENSOR_ATTR(ads1_chan3,  S_IRUGO, epm_adc_psoc_show_in, NULL, 19),
+	SENSOR_ATTR(ads1_chan4,  S_IRUGO, epm_adc_psoc_show_in, NULL, 20),
+	SENSOR_ATTR(ads1_chan5,  S_IRUGO, epm_adc_psoc_show_in, NULL, 21),
+	SENSOR_ATTR(ads1_chan6,  S_IRUGO, epm_adc_psoc_show_in, NULL, 22),
+	SENSOR_ATTR(ads1_chan7,  S_IRUGO, epm_adc_psoc_show_in, NULL, 23),
+	SENSOR_ATTR(ads1_chan8,  S_IRUGO, epm_adc_psoc_show_in, NULL, 24),
+	SENSOR_ATTR(ads1_chan9,  S_IRUGO, epm_adc_psoc_show_in, NULL, 25),
+	SENSOR_ATTR(ads1_chan10, S_IRUGO, epm_adc_psoc_show_in, NULL, 26),
+	SENSOR_ATTR(ads1_chan11, S_IRUGO, epm_adc_psoc_show_in, NULL, 27),
+	SENSOR_ATTR(ads1_chan12, S_IRUGO, epm_adc_psoc_show_in, NULL, 28),
+	SENSOR_ATTR(ads1_chan13, S_IRUGO, epm_adc_psoc_show_in, NULL, 29),
+	SENSOR_ATTR(ads1_chan14, S_IRUGO, epm_adc_psoc_show_in, NULL, 30),
+	SENSOR_ATTR(ads1_chan15, S_IRUGO, epm_adc_psoc_show_in, NULL, 31),
 };
 
 static int __devinit epm_adc_psoc_init_hwmon(struct spi_device *spi,
 						struct epm_adc_drv *epm_adc)
 {
-	int i, rc, num_chans = 31;
+	int i, rc, num_chans = 15;
 
 	for (i = 0; i < num_chans; i++) {
 		rc = device_create_file(&spi->dev,
@@ -2017,8 +1521,8 @@ static int get_device_tree_data(struct spi_device *spi)
 {
 	const struct device_node *node = spi->dev.of_node;
 	struct epm_adc_drv *epm_adc;
-	u32 *epm_ch_gain, *epm_ch_rsense;
-	u32 rc = 0, epm_num_channels, i, channel_mask;
+	int32_t *epm_ch_gain, *epm_ch_rsense;
+	u32 rc = 0, epm_num_channels, i;
 
 	if (!node)
 		return -EINVAL;
@@ -2031,14 +1535,14 @@ static int get_device_tree_data(struct spi_device *spi)
 	}
 
 	epm_ch_gain = devm_kzalloc(&spi->dev,
-			epm_num_channels * sizeof(u32), GFP_KERNEL);
+				epm_num_channels, GFP_KERNEL);
 	if (!epm_ch_gain) {
 		dev_err(&spi->dev, "cannot allocate gain\n");
 		return -ENOMEM;
 	}
 
 	epm_ch_rsense = devm_kzalloc(&spi->dev,
-			epm_num_channels * sizeof(u32), GFP_KERNEL);
+				epm_num_channels, GFP_KERNEL);
 	if (!epm_ch_rsense) {
 		dev_err(&spi->dev, "cannot allocate rsense\n");
 		return -ENOMEM;
@@ -2058,13 +1562,6 @@ static int get_device_tree_data(struct spi_device *spi)
 		return rc;
 	}
 
-	rc = of_property_read_u32(node,
-			"qcom,channel-type", &channel_mask);
-	if (rc) {
-		dev_err(&spi->dev, "missing channel mask\n");
-		return -ENODEV;
-	}
-
 	epm_adc = devm_kzalloc(&spi->dev,
 			sizeof(struct epm_adc_drv) +
 			(epm_num_channels *
@@ -2082,7 +1579,6 @@ static int get_device_tree_data(struct spi_device *spi)
 							epm_ch_gain[i];
 	}
 
-	epm_adc->channel_mask = channel_mask;
 	epm_adc_drv = epm_adc;
 
 	return 0;
@@ -2090,16 +1586,13 @@ static int get_device_tree_data(struct spi_device *spi)
 
 static int __devinit epm_adc_psoc_spi_probe(struct spi_device *spi)
 {
-
 	struct epm_adc_drv *epm_adc;
 	struct device_node *node = spi->dev.of_node;
 	int rc = 0;
 
-	if (node) {
+	if (node)
 		rc = get_device_tree_data(spi);
-		if (rc)
-			return rc;
-	} else {
+	else {
 		epm_adc = epm_adc_drv;
 		epm_adc_drv->epm_spi_client = spi;
 		epm_adc_drv->epm_spi_client->bits_per_word =
@@ -2110,15 +1603,6 @@ static int __devinit epm_adc_psoc_spi_probe(struct spi_device *spi)
 	epm_adc = epm_adc_drv;
 	epm_adc->misc.name = EPM_ADC_DRIVER_NAME;
 	epm_adc->misc.minor = MISC_DYNAMIC_MINOR;
-
-	if (node) {
-		epm_adc->misc.fops = &epm_adc_fops;
-		if (misc_register(&epm_adc->misc)) {
-			pr_err("Unable to register misc device!\n");
-			return -EFAULT;
-		}
-	}
-
 	epm_adc_drv->epm_spi_client = spi;
 	epm_adc_drv->epm_spi_client->bits_per_word =
 				EPM_ADC_ADS_SPI_BITS_PER_WORD;
@@ -2135,6 +1619,7 @@ static int __devinit epm_adc_psoc_spi_probe(struct spi_device *spi)
 	}
 
 	mutex_init(&epm_adc->conv_lock);
+
 	return rc;
 }
 
@@ -2145,7 +1630,7 @@ static int __devexit epm_adc_psoc_spi_remove(struct spi_device *spi)
 }
 
 static const struct of_device_id epm_adc_psoc_match_table[] = {
-	{	.compatible = "cy,epm-adc-cy8c5568lti-114",
+	{	.compatible = "qcom,epm-adc",
 	},
 	{}
 };
@@ -2171,7 +1656,8 @@ static ssize_t epm_adc_show_in(struct device *dev,
 	conv.device_idx = attr->index / pdata->chan_per_adc;
 	conv.channel_idx = attr->index % pdata->chan_per_adc;
 	conv.physical = 0;
-
+	pr_debug("%s: device_idx=%d channel_idx=%d", __func__, conv.device_idx,
+			conv.channel_idx);
 	if (!epm_adc_expander_register) {
 		rc = epm_adc_i2c_expander_register();
 		if (rc) {
@@ -2194,7 +1680,6 @@ static ssize_t epm_adc_show_in(struct device *dev,
 			__func__, rc);
 		return 0;
 	}
-
 	rc = epm_adc_hw_deinit(epm_adc);
 	if (rc) {
 		pr_err("%s: epm_adc_hw_deinit() failed, rc = %d",

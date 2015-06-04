@@ -20,7 +20,7 @@
 #include <linux/platform_device.h>
 #include <linux/slab.h>
 #include <linux/dma-mapping.h>
-
+#include <linux/android_pmem.h>
 #include <asm/dma.h>
 #include <sound/core.h>
 #include <sound/soc.h>
@@ -236,11 +236,6 @@ static void event_handler(uint32_t opcode,
 			}
 			atomic_set(&prtd->start, 1);
 			break;
-		case ASM_STREAM_CMD_FLUSH:
-			pr_debug("ASM_STREAM_CMD_FLUSH\n");
-			prtd->cmd_ack = 1;
-			wake_up(&the_locks.flush_wait);
-			break;
 		default:
 			break;
 		}
@@ -274,29 +269,9 @@ static int msm_pcm_playback_prepare(struct snd_pcm_substream *substream)
 	prtd->channel_mode = runtime->channels;
 	if (prtd->enabled)
 		return 0;
-	pr_debug("prtd->set_channel_map: %d", prtd->set_channel_map);
-	if (!prtd->set_channel_map) {
-		pr_debug("using default channel map");
-		memset(prtd->channel_map, 0, PCM_FORMAT_MAX_NUM_CHANNEL);
-		if (prtd->channel_mode == 1) {
-			prtd->channel_map[0] = PCM_CHANNEL_FL;
-		} else if (prtd->channel_mode == 2) {
-			prtd->channel_map[0] = PCM_CHANNEL_FL;
-			prtd->channel_map[1] = PCM_CHANNEL_FR;
-		} else if (prtd->channel_mode == 6) {
-			prtd->channel_map[0] = PCM_CHANNEL_FC;
-			prtd->channel_map[1] = PCM_CHANNEL_FL;
-			prtd->channel_map[2] = PCM_CHANNEL_FR;
-			prtd->channel_map[3] = PCM_CHANNEL_LB;
-			prtd->channel_map[4] = PCM_CHANNEL_RB;
-			prtd->channel_map[5] = PCM_CHANNEL_LFE;
-		} else {
-			pr_err("%s: ERROR.unsupported num_ch = %u\n", __func__,
-				prtd->channel_mode);
-		}
-	}
+
 	ret = q6asm_media_format_block_multi_ch_pcm(prtd->audio_client,
-			runtime->rate, runtime->channels, prtd->channel_map);
+			runtime->rate, runtime->channels);
 	if (ret < 0)
 		pr_info("%s: CMD Format block failed\n", __func__);
 
@@ -477,7 +452,6 @@ static int msm_pcm_open(struct snd_pcm_substream *substream)
 	}
 
 	prtd->dsp_cnt = 0;
-	prtd->set_channel_map = false;
 	runtime->private_data = prtd;
 	pr_debug("substream->pcm->device = %d\n", substream->pcm->device);
 	pr_debug("soc_prtd->dai_link->be_id = %d\n", soc_prtd->dai_link->be_id);
@@ -517,6 +491,7 @@ int multi_ch_pcm_set_volume(unsigned volume)
 	multi_ch_pcm_audio.volume = volume;
 	return rc;
 }
+
 
 static int msm_pcm_playback_copy(struct snd_pcm_substream *substream, int a,
 	snd_pcm_uframes_t hwoff, void __user *buf, snd_pcm_uframes_t frames)
@@ -805,103 +780,26 @@ static int msm_pcm_hw_params(struct snd_pcm_substream *substream,
 	snd_pcm_set_runtime_buffer(substream, &substream->dma_buffer);
 	return 0;
 }
-static int msm_pcm_ioctl(struct snd_pcm_substream *substream,
-			unsigned int cmd, void *arg)
-{
-	struct snd_pcm_runtime *runtime = substream->runtime;
-	struct msm_audio *prtd = runtime->private_data;
-	int ret = 0, rc;
-
-	pr_debug("%s\n", __func__);
-	ret = snd_pcm_lib_ioctl(substream, cmd, arg);
-	if (ret < 0) {
-		pr_err("%s, snd_pcm_lib_ioctl error\n", __func__);
-		return ret;
-	}
-
-	switch (cmd) {
-	case SNDRV_PCM_IOCTL1_RESET:
-		pr_debug("%s, SNDRV_PCM_IOCTL1_RESET\n", __func__);
-		if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK) {
-			prtd->cmd_ack = 0;
-			rc = q6asm_cmd(prtd->audio_client, CMD_FLUSH);
-			if (rc < 0) {
-				pr_err("%s: flush cmd failed rc=%d\n",
-					 __func__, rc);
-				break;
-			}
-			rc = wait_event_timeout(the_locks.flush_wait,
-				 prtd->cmd_ack, 5 * HZ);
-			if (rc < 0)
-				pr_err("Flush cmd timeout\n");
-			prtd->pcm_irq_pos = 0;
-			atomic_set(&prtd->out_count, runtime->periods);
-		}
-		break;
-	default:
-		break;
-	}
-
-	return ret;
-}
 
 static struct snd_pcm_ops msm_pcm_ops = {
 	.open           = msm_pcm_open,
 	.copy		= msm_pcm_copy,
 	.hw_params	= msm_pcm_hw_params,
 	.close          = msm_pcm_close,
-	.ioctl          = msm_pcm_ioctl,
+	.ioctl          = snd_pcm_lib_ioctl,
 	.prepare        = msm_pcm_prepare,
 	.trigger        = msm_pcm_trigger,
 	.pointer        = msm_pcm_pointer,
 	.mmap		= msm_pcm_mmap,
 };
 
-
-static int pcm_chmap_ctl_put(struct snd_kcontrol *kcontrol,
-				struct snd_ctl_elem_value *ucontrol)
-{
-	int i;
-	char channel_mapping[PCM_FORMAT_MAX_NUM_CHANNEL];
-
-	pr_debug("%s", __func__);
-	for (i = 0; i < PCM_FORMAT_MAX_NUM_CHANNEL; i++)
-		channel_mapping[i] = (char)(ucontrol->value.integer.value[i]);
-	if (multi_ch_pcm_audio.prtd) {
-		multi_ch_pcm_audio.prtd->set_channel_map = true;
-		memcpy(multi_ch_pcm_audio.prtd->channel_map, channel_mapping,
-			 PCM_FORMAT_MAX_NUM_CHANNEL);
-	}
-	return 0;
-}
-
-
 static int msm_asoc_pcm_new(struct snd_soc_pcm_runtime *rtd)
 {
 	struct snd_card *card = rtd->card->snd_card;
-	struct snd_pcm *pcm = rtd->pcm->streams[0].pcm;
-	struct snd_pcm_chmap *chmap_info;
-	struct snd_kcontrol *kctl;
-	char device_num[3];
+	int ret = 0;
 
-	int i, ret = 0;
 	if (!card->dev->coherent_dma_mask)
 		card->dev->coherent_dma_mask = DMA_BIT_MASK(32);
-
-	pr_debug("%s, Channel map cntrl add\n", __func__);
-	ret = snd_pcm_add_chmap_ctls(pcm, SNDRV_PCM_STREAM_PLAYBACK,
-				NULL, PCM_FORMAT_MAX_NUM_CHANNEL, 0,
-				&chmap_info);
-	if (ret < 0)
-		return ret;
-	kctl = chmap_info->kctl;
-	for (i = 0; i < kctl->count; i++)
-		kctl->vd[i].access |= SNDRV_CTL_ELEM_ACCESS_WRITE;
-	snprintf(device_num, sizeof(device_num), "%d", pcm->device);
-	strlcat(kctl->id.name, device_num, sizeof(kctl->id.name));
-	pr_debug("%s, Overwriting channel map control name to: %s",
-			 __func__, kctl->id.name);
-	kctl->put = pcm_chmap_ctl_put;
 	return ret;
 }
 
@@ -938,7 +836,6 @@ static int __init msm_soc_platform_init(void)
 	init_waitqueue_head(&the_locks.eos_wait);
 	init_waitqueue_head(&the_locks.write_wait);
 	init_waitqueue_head(&the_locks.read_wait);
-	init_waitqueue_head(&the_locks.flush_wait);
 
 	return platform_driver_register(&msm_pcm_driver);
 }

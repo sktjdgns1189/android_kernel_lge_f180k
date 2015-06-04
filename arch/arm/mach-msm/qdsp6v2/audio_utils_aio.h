@@ -176,8 +176,7 @@ struct q6audio_aio {
 	struct ion_client *client;
 	struct audio_aio_drv_operations drv_ops;
 	union msm_audio_event_payload eos_write_payload;
-	uint32_t device_events;
-	uint16_t volume;
+
 	uint32_t drv_status;
 	int event_abort;
 	int eos_rsp;
@@ -213,7 +212,6 @@ int audio_aio_fsync(struct file *file, loff_t start, loff_t end, int datasync);
 void audio_aio_async_out_flush(struct q6audio_aio *audio);
 void audio_aio_async_in_flush(struct q6audio_aio *audio);
 void audio_aio_ioport_reset(struct q6audio_aio *audio);
-int enable_volume_ramp(struct q6audio_aio *audio);
 #ifdef CONFIG_DEBUG_FS
 ssize_t audio_aio_debug_open(struct inode *inode, struct file *file);
 ssize_t audio_aio_debug_read(struct file *file, char __user *buf,

@@ -1,4 +1,4 @@
-/* Copyright (c) 2009-2013, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2009-2012, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -352,7 +352,7 @@ u32 __branch_disable_reg(const struct branch *b, const char *name)
 	u32 reg_val;
 
 	reg_val = b->ctl_reg ? readl_relaxed(b->ctl_reg) : 0;
-	if (b->ctl_reg && b->en_mask) {
+	if (b->en_mask) {
 		reg_val &= ~(b->en_mask);
 		writel_relaxed(reg_val, b->ctl_reg);
 	}
@@ -527,7 +527,6 @@ static int rcg_clk_set_rate(struct clk *c, unsigned long rate)
 	 * is called to make sure the MNCNTR_EN bit is set correctly.
 	 */
 	rcg->current_freq = nf;
-	c->parent = nf->src_clk;
 
 	/* Enable any clocks that were disabled. */
 	if (!rcg->bank_info) {
@@ -560,11 +559,7 @@ static int rcg_clk_is_enabled(struct clk *c)
 	return to_rcg_clk(c)->enabled;
 }
 
-/*
- * Return a supported rate that's at least the specified rate or
- * the max supported rate if the specified rate is larger than the
- * max supported rate.
- */
+/* Return a supported rate that's at least the specified rate. */
 static long rcg_clk_round_rate(struct clk *c, unsigned long rate)
 {
 	struct rcg_clk *rcg = to_rcg_clk(c);
@@ -574,12 +569,11 @@ static long rcg_clk_round_rate(struct clk *c, unsigned long rate)
 		if (f->freq_hz >= rate)
 			return f->freq_hz;
 
-	f--;
-	return f->freq_hz;
+	return -EPERM;
 }
 
 /* Return the nth supported frequency for a given clock. */
-static long rcg_clk_list_rate(struct clk *c, unsigned n)
+static int rcg_clk_list_rate(struct clk *c, unsigned n)
 {
 	struct rcg_clk *rcg = to_rcg_clk(c);
 
@@ -587,6 +581,11 @@ static long rcg_clk_list_rate(struct clk *c, unsigned n)
 		return -ENXIO;
 
 	return (rcg->freq_tbl + n)->freq_hz;
+}
+
+static struct clk *rcg_clk_get_parent(struct clk *c)
+{
+	return to_rcg_clk(c)->current_freq->src_clk;
 }
 
 /* Disable hw clock gating if not set at boot */
@@ -603,21 +602,20 @@ enum handoff branch_handoff(struct branch *b, struct clk *c)
 static enum handoff branch_clk_handoff(struct clk *c)
 {
 	struct branch_clk *br = to_branch_clk(c);
-	if (branch_handoff(&br->b, &br->c) == HANDOFF_ENABLED_CLK) {
-		br->enabled = true;
-		return HANDOFF_ENABLED_CLK;
-	}
-
-	return HANDOFF_DISABLED_CLK;
+	return branch_handoff(&br->b, &br->c);
 }
 
-static struct clk *rcg_clk_get_parent(struct clk *c)
+static enum handoff rcg_clk_handoff(struct clk *c)
 {
 	struct rcg_clk *rcg = to_rcg_clk(c);
 	uint32_t ctl_val, ns_val, md_val, ns_mask;
 	struct clk_freq_tbl *freq;
+	enum handoff ret;
 
 	ctl_val = readl_relaxed(rcg->b.ctl_reg);
+	ret = branch_handoff(&rcg->b, &rcg->c);
+	if (ret == HANDOFF_DISABLED_CLK)
+		return HANDOFF_DISABLED_CLK;
 
 	if (rcg->bank_info) {
 		const struct bank_masks *bank_masks = rcg->bank_info;
@@ -634,40 +632,20 @@ static struct clk *rcg_clk_get_parent(struct clk *c)
 		ns_mask = rcg->ns_mask;
 		md_val = rcg->md_reg ? readl_relaxed(rcg->md_reg) : 0;
 	}
-
 	if (!ns_mask)
-		return NULL;
-
+		return HANDOFF_UNKNOWN_RATE;
 	ns_val = readl_relaxed(rcg->ns_reg) & ns_mask;
 	for (freq = rcg->freq_tbl; freq->freq_hz != FREQ_END; freq++) {
 		if ((freq->ns_val & ns_mask) == ns_val &&
 		    (!freq->md_val || freq->md_val == md_val))
 			break;
 	}
-
 	if (freq->freq_hz == FREQ_END)
-		return NULL;
+		return HANDOFF_UNKNOWN_RATE;
 
-	/* Cache the results for the handoff code. */
 	rcg->current_freq = freq;
+	c->rate = freq->freq_hz;
 
-	return freq->src_clk;
-}
-
-static enum handoff rcg_clk_handoff(struct clk *c)
-{
-	struct rcg_clk *rcg = to_rcg_clk(c);
-	enum handoff ret;
-
-	if (rcg->current_freq && rcg->current_freq->freq_hz != FREQ_END)
-		c->rate = rcg->current_freq->freq_hz;
-
-	ret = branch_handoff(&rcg->b, &rcg->c);
-	if (ret == HANDOFF_DISABLED_CLK)
-		return HANDOFF_DISABLED_CLK;
-
-	rcg->prepared = true;
-	rcg->enabled = true;
 	return HANDOFF_ENABLED_CLK;
 }
 
@@ -703,6 +681,11 @@ static void branch_clk_disable(struct clk *c)
 	__branch_disable_reg(&br->b, br->c.dbg_name);
 	br->enabled = false;
 	spin_unlock_irqrestore(&local_clock_reg_lock, flags);
+}
+
+static struct clk *branch_clk_get_parent(struct clk *c)
+{
+	return to_branch_clk(c)->parent;
 }
 
 static int branch_clk_is_enabled(struct clk *c)
@@ -756,10 +739,10 @@ static int branch_set_flags(struct branch *b, unsigned flags)
 	spin_lock_irqsave(&local_clock_reg_lock, irq_flags);
 	reg_val = readl_relaxed(b->retain_reg);
 	switch (flags) {
-	case CLKFLAG_RETAIN_MEM:
+	case CLKFLAG_RETAIN:
 		reg_val |= b->retain_mask;
 		break;
-	case CLKFLAG_NORETAIN_MEM:
+	case CLKFLAG_NORETAIN:
 		reg_val &= ~b->retain_mask;
 		break;
 	default:
@@ -851,15 +834,9 @@ struct clk_ops clk_ops_branch = {
 	.in_hwcg_mode = branch_clk_in_hwcg_mode,
 	.is_enabled = branch_clk_is_enabled,
 	.reset = branch_clk_reset,
+	.get_parent = branch_clk_get_parent,
 	.handoff = branch_clk_handoff,
 	.set_flags = branch_clk_set_flags,
-};
-
-struct clk_ops clk_ops_smi_2x = {
-	.prepare = branch_clk_enable,
-	.unprepare = branch_clk_disable,
-	.is_enabled = branch_clk_is_enabled,
-	.handoff = branch_clk_handoff,
 };
 
 struct clk_ops clk_ops_reset = {
@@ -885,8 +862,8 @@ struct clk_ops clk_ops_rcg = {
 	.is_enabled = rcg_clk_is_enabled,
 	.round_rate = rcg_clk_round_rate,
 	.reset = rcg_clk_reset,
-	.set_flags = rcg_clk_set_flags,
 	.get_parent = rcg_clk_get_parent,
+	.set_flags = rcg_clk_set_flags,
 };
 
 static int cdiv_clk_enable(struct clk *c)
@@ -944,7 +921,7 @@ static long cdiv_clk_round_rate(struct clk *c, unsigned long rate)
 	return rate > to_cdiv_clk(c)->max_div ? -EPERM : rate;
 }
 
-static long cdiv_clk_list_rate(struct clk *c, unsigned n)
+static int cdiv_clk_list_rate(struct clk *c, unsigned n)
 {
 	return n > to_cdiv_clk(c)->max_div ? -ENXIO : n;
 }
@@ -966,7 +943,6 @@ static enum handoff cdiv_clk_handoff(struct clk *c)
 		reg_val >>= cdiv->div_offset;
 		cdiv->cur_div = (reg_val & (cdiv->max_div - 1)) + 1;
 	}
-	c->rate = cdiv->cur_div;
 
 	return HANDOFF_ENABLED_CLK;
 }

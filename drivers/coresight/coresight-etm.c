@@ -173,8 +173,6 @@ do {									\
 #define ETM_REG_DUMP_VER_OFF		(4)
 #define ETM_REG_DUMP_VER		(1)
 
-#define CPMR_ETMCLKEN			(8)
-
 enum etm_addr_type {
 	ETM_ADDR_TYPE_NONE,
 	ETM_ADDR_TYPE_SINGLE,
@@ -265,42 +263,16 @@ struct etm_drvdata {
 
 static struct etm_drvdata *etmdrvdata[NR_CPUS];
 
-static bool etm_os_lock_present(struct etm_drvdata *drvdata)
-{
-	uint32_t etmoslsr;
-
-	etmoslsr = etm_readl(drvdata, ETMOSLSR);
-	if (!BVAL(etmoslsr, 0) && !BVAL(etmoslsr, 3))
-		return false;
-	return true;
-}
-
 /*
- * Unlock OS lock to allow memory mapped access on Krait and in general
- * so that ETMSR[1] can be polled while clearing the ETMCR[10] prog bit
- * since ETMSR[1] is set when prog bit is set or OS lock is set.
+ * Memory mapped writes to clear os lock are not supported on Krait v1, v2
+ * and OS lock must be unlocked before any memory mapped access, otherwise
+ * memory mapped reads/writes will be invalid.
  */
 static void etm_os_unlock(void *info)
 {
-	struct etm_drvdata *drvdata = (struct etm_drvdata *) info;
-
-	/*
-	 * Memory mapped writes to clear os lock are not supported on Krait v1,
-	 * v2 and OS lock must be unlocked before any memory mapped access,
-	 * otherwise memory mapped reads/writes will be invalid.
-	 */
 	if (cpu_is_krait()) {
 		etm_writel_cp14(0x0, ETMOSLAR);
-		/* ensure os lock is unlocked before we return */
 		isb();
-	} else {
-		ETM_UNLOCK(drvdata);
-		if (etm_os_lock_present(drvdata)) {
-			etm_writel(drvdata, 0x0, ETMOSLAR);
-			/* ensure os lock is unlocked before we return */
-			mb();
-		}
-		ETM_LOCK(drvdata);
 	}
 }
 
@@ -346,21 +318,11 @@ static void etm_clr_pwrdwn(struct etm_drvdata *drvdata)
 
 static void etm_set_pwrup(struct etm_drvdata *drvdata)
 {
-	uint32_t cpmr;
 	uint32_t etmpdcr;
 
-	 /* For Krait, use cp15 CPMR_ETMCLKEN instead of ETMPDCR since ETMPDCR
-	  * is not supported for this purpose on Krait v4.
-	  */
-	if (cpu_is_krait()) {
-		asm volatile("mrc p15, 7, %0, c15, c0, 5" : "=r" (cpmr));
-		cpmr  |= CPMR_ETMCLKEN;
-		asm volatile("mcr p15, 7, %0, c15, c0, 5" : : "r" (cpmr));
-	} else {
-		etmpdcr = etm_readl_mm(drvdata, ETMPDCR);
-		etmpdcr |= BIT(3);
-		etm_writel_mm(drvdata, etmpdcr, ETMPDCR);
-	}
+	etmpdcr = etm_readl_mm(drvdata, ETMPDCR);
+	etmpdcr |= BIT(3);
+	etm_writel_mm(drvdata, etmpdcr, ETMPDCR);
 	/* ensure pwrup completes before subsequent cp14 accesses */
 	mb();
 	isb();
@@ -368,24 +330,14 @@ static void etm_set_pwrup(struct etm_drvdata *drvdata)
 
 static void etm_clr_pwrup(struct etm_drvdata *drvdata)
 {
-	uint32_t cpmr;
 	uint32_t etmpdcr;
 
 	/* ensure pending cp14 accesses complete before clearing pwrup */
 	mb();
 	isb();
-	 /* For Krait, use cp15 CPMR_ETMCLKEN instead of ETMPDCR since ETMPDCR
-	  * is not supported for this purpose on Krait v4.
-	  */
-	if (cpu_is_krait()) {
-		asm volatile("mrc p15, 7, %0, c15, c0, 5" : "=r" (cpmr));
-		cpmr  &= ~CPMR_ETMCLKEN;
-		asm volatile("mcr p15, 7, %0, c15, c0, 5" : : "r" (cpmr));
-	} else {
-		etmpdcr = etm_readl_mm(drvdata, ETMPDCR);
-		etmpdcr &= ~BIT(3);
-		etm_writel_mm(drvdata, etmpdcr, ETMPDCR);
-	}
+	etmpdcr = etm_readl_mm(drvdata, ETMPDCR);
+	etmpdcr &= ~BIT(3);
+	etm_writel_mm(drvdata, etmpdcr, ETMPDCR);
 }
 
 static void etm_set_prog(struct etm_drvdata *drvdata)
@@ -1885,26 +1837,11 @@ static int etm_cpu_callback(struct notifier_block *nfb, unsigned long action,
 			    void *hcpu)
 {
 	unsigned int cpu = (unsigned long)hcpu;
-	static bool clk_disable[NR_CPUS];
-	int ret;
 
 	if (!etmdrvdata[cpu])
 		goto out;
 
 	switch (action & (~CPU_TASKS_FROZEN)) {
-	case CPU_UP_PREPARE:
-		if (!etmdrvdata[cpu]->os_unlock) {
-			ret = clk_prepare_enable(etmdrvdata[cpu]->clk);
-			if (ret) {
-				dev_err(etmdrvdata[cpu]->dev,
-					"ETM clk enable during hotplug failed"
-					"for cpu: %d, ret: %d\n", cpu, ret);
-				return notifier_from_errno(ret);
-			}
-			clk_disable[cpu] = true;
-		}
-		break;
-
 	case CPU_STARTING:
 		spin_lock(&etmdrvdata[cpu]->spinlock);
 		if (!etmdrvdata[cpu]->os_unlock) {
@@ -1918,11 +1855,6 @@ static int etm_cpu_callback(struct notifier_block *nfb, unsigned long action,
 		break;
 
 	case CPU_ONLINE:
-		if (clk_disable[cpu]) {
-			clk_disable_unprepare(etmdrvdata[cpu]->clk);
-			clk_disable[cpu] = false;
-		}
-
 		if (etmdrvdata[cpu]->boot_enable &&
 		    !etmdrvdata[cpu]->sticky_enable)
 			coresight_enable(etmdrvdata[cpu]->csdev);
@@ -1930,13 +1862,6 @@ static int etm_cpu_callback(struct notifier_block *nfb, unsigned long action,
 		if (etmdrvdata[cpu]->pcsave_boot_enable &&
 		    !etmdrvdata[cpu]->pcsave_sticky_enable)
 			__etm_store_pcsave(etmdrvdata[cpu], 1);
-		break;
-
-	case CPU_UP_CANCELED:
-		if (clk_disable[cpu]) {
-			clk_disable_unprepare(etmdrvdata[cpu]->clk);
-			clk_disable[cpu] = false;
-		}
 		break;
 
 	case CPU_DYING:
@@ -2113,10 +2038,6 @@ static int __devinit etm_probe(struct platform_device *pdev)
 	struct msm_client_dump dump;
 	struct coresight_desc *desc;
 
-	if (coresight_fuse_access_disabled() ||
-	    coresight_fuse_apps_access_disabled())
-		return -EPERM;
-
 	if (pdev->dev.of_node) {
 		pdata = of_get_coresight_platform_data(dev, pdev->dev.of_node);
 		if (IS_ERR(pdata))
@@ -2130,7 +2051,7 @@ static int __devinit etm_probe(struct platform_device *pdev)
 	drvdata->dev = &pdev->dev;
 	platform_set_drvdata(pdev, drvdata);
 
-	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "etm-base");
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	if (!res)
 		return -ENODEV;
 	reg_size = resource_size(res);
@@ -2158,20 +2079,14 @@ static int __devinit etm_probe(struct platform_device *pdev)
 
 	drvdata->cpu = count++;
 
+	get_online_cpus();
 	etmdrvdata[drvdata->cpu] = drvdata;
 
-	/*
-	 * This is safe wrt CPU_UP_PREPARE and CPU_STARTING hotplug callbacks
-	 * on the secondary cores that may enable the clock and perform
-	 * etm_os_unlock since they occur before the cpu online mask is updated
-	 * for the cpu which is checked by this smp call.
-	 */
-	if (!smp_call_function_single(drvdata->cpu, etm_os_unlock, drvdata, 1))
+	if (!smp_call_function_single(drvdata->cpu, etm_os_unlock, NULL, 1))
 		drvdata->os_unlock = true;
-
 	/*
-	 * OS unlock must have happened on cpu0 so use it to populate read-only
-	 * configuration data for ETM0. For other ETMs copy it over from ETM0.
+	 * Use CPU0 to populate read-only configuration data for ETM0. For
+	 * other ETMs copy it over from ETM0.
 	 */
 	if (drvdata->cpu == 0) {
 		register_hotcpu_notifier(&etm_cpu_notifier);
@@ -2181,6 +2096,8 @@ static int __devinit etm_probe(struct platform_device *pdev)
 	} else {
 		etm_copy_arch_data(drvdata);
 	}
+
+	put_online_cpus();
 
 	if (etm_arch_supported(drvdata->arch) == false) {
 		ret = -EINVAL;

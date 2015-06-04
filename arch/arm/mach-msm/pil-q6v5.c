@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2013, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2012, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -16,11 +16,10 @@
 #include <linux/platform_device.h>
 #include <linux/io.h>
 #include <linux/iopoll.h>
+#include <linux/elf.h>
 #include <linux/err.h>
 #include <linux/of.h>
 #include <linux/clk.h>
-#include <linux/regulator/consumer.h>
-#include <mach/rpm-regulator-smd.h>
 #include <mach/clk.h>
 #include "peripheral-loader.h"
 #include "pil-q6v5.h"
@@ -29,6 +28,7 @@
 #define QDSP6SS_RESET			0x014
 #define QDSP6SS_GFMUX_CTL		0x020
 #define QDSP6SS_PWR_CTL			0x030
+#define QDSP6SS_CGC_OVERRIDE		0x034
 
 /* AXI Halt Register Offsets */
 #define AXI_HALTREQ			0x0
@@ -46,81 +46,35 @@
 #define Q6SS_CLK_ENA			BIT(1)
 
 /* QDSP6SS_PWR_CTL */
-#define Q6SS_L2DATA_SLP_NRET_N_0	BIT(0)
-#define Q6SS_L2DATA_SLP_NRET_N_1	BIT(1)
-#define Q6SS_L2DATA_SLP_NRET_N_2	BIT(2)
+#define Q6SS_L2DATA_SLP_NRET_N		(BIT(0)|BIT(1)|BIT(2))
 #define Q6SS_L2TAG_SLP_NRET_N		BIT(16)
 #define Q6SS_ETB_SLP_NRET_N		BIT(17)
 #define Q6SS_L2DATA_STBY_N		BIT(18)
 #define Q6SS_SLP_RET_N			BIT(19)
 #define Q6SS_CLAMP_IO			BIT(20)
 #define QDSS_BHS_ON			BIT(21)
-#define QDSS_LDO_BYP			BIT(22)
+
+/* QDSP6SS_CGC_OVERRIDE */
+#define Q6SS_CORE_CLK_EN		BIT(0)
+#define Q6SS_CORE_RCLK_EN		BIT(1)
 
 int pil_q6v5_make_proxy_votes(struct pil_desc *pil)
 {
 	int ret;
-	struct q6v5_data *drv = container_of(pil, struct q6v5_data, desc);
+	struct q6v5_data *drv = dev_get_drvdata(pil->dev);
 
 	ret = clk_prepare_enable(drv->xo);
 	if (ret) {
-		dev_err(pil->dev, "Failed to vote for XO\n");
-		goto out;
+		dev_err(pil->dev, "Failed to enable XO\n");
+		return ret;
 	}
-
-	ret = regulator_set_voltage(drv->vreg_cx,
-				    RPM_REGULATOR_CORNER_SUPER_TURBO,
-				    RPM_REGULATOR_CORNER_SUPER_TURBO);
-	if (ret) {
-		dev_err(pil->dev, "Failed to request vdd_cx voltage.\n");
-		goto err_cx_voltage;
-	}
-
-	ret = regulator_set_optimum_mode(drv->vreg_cx, 100000);
-	if (ret < 0) {
-		dev_err(pil->dev, "Failed to set vdd_cx mode.\n");
-		goto err_cx_mode;
-	}
-
-	ret = regulator_enable(drv->vreg_cx);
-	if (ret) {
-		dev_err(pil->dev, "Failed to vote for vdd_cx\n");
-		goto err_cx_enable;
-	}
-
-	if (drv->vreg_pll) {
-		ret = regulator_enable(drv->vreg_pll);
-		if (ret) {
-			dev_err(pil->dev, "Failed to vote for vdd_pll\n");
-			goto err_vreg_pll;
-		}
-	}
-
 	return 0;
-
-err_vreg_pll:
-	regulator_disable(drv->vreg_cx);
-err_cx_enable:
-	regulator_set_optimum_mode(drv->vreg_cx, 0);
-err_cx_mode:
-	regulator_set_voltage(drv->vreg_cx, RPM_REGULATOR_CORNER_NONE,
-			      RPM_REGULATOR_CORNER_SUPER_TURBO);
-err_cx_voltage:
-	clk_disable_unprepare(drv->xo);
-out:
-	return ret;
 }
 EXPORT_SYMBOL(pil_q6v5_make_proxy_votes);
 
 void pil_q6v5_remove_proxy_votes(struct pil_desc *pil)
 {
-	struct q6v5_data *drv = container_of(pil, struct q6v5_data, desc);
-	if (drv->vreg_pll)
-		regulator_disable(drv->vreg_pll);
-	regulator_disable(drv->vreg_cx);
-	regulator_set_optimum_mode(drv->vreg_cx, 0);
-	regulator_set_voltage(drv->vreg_cx, RPM_REGULATOR_CORNER_NONE,
-			      RPM_REGULATOR_CORNER_SUPER_TURBO);
+	struct q6v5_data *drv = dev_get_drvdata(pil->dev);
 	clk_disable_unprepare(drv->xo);
 }
 EXPORT_SYMBOL(pil_q6v5_remove_proxy_votes);
@@ -146,10 +100,20 @@ void pil_q6v5_halt_axi_port(struct pil_desc *pil, void __iomem *halt_base)
 }
 EXPORT_SYMBOL(pil_q6v5_halt_axi_port);
 
+int pil_q6v5_init_image(struct pil_desc *pil, const u8 *metadata,
+			       size_t size)
+{
+	const struct elf32_hdr *ehdr = (struct elf32_hdr *)metadata;
+	struct q6v5_data *drv = dev_get_drvdata(pil->dev);
+	drv->start_addr = ehdr->e_entry;
+	return 0;
+}
+EXPORT_SYMBOL(pil_q6v5_init_image);
+
 void pil_q6v5_shutdown(struct pil_desc *pil)
 {
 	u32 val;
-	struct q6v5_data *drv = container_of(pil, struct q6v5_data, desc);
+	struct q6v5_data *drv = dev_get_drvdata(pil->dev);
 
 	/* Turn off core clock */
 	val = readl_relaxed(drv->reg_base + QDSP6SS_GFMUX_CTL);
@@ -162,18 +126,17 @@ void pil_q6v5_shutdown(struct pil_desc *pil)
 	writel_relaxed(val, drv->reg_base + QDSP6SS_PWR_CTL);
 
 	/* Turn off Q6 memories */
-	val &= ~(Q6SS_L2DATA_SLP_NRET_N_0 | Q6SS_L2DATA_SLP_NRET_N_1 |
-		 Q6SS_L2DATA_SLP_NRET_N_2 | Q6SS_SLP_RET_N |
+	val &= ~(Q6SS_L2DATA_SLP_NRET_N | Q6SS_SLP_RET_N |
 		 Q6SS_L2TAG_SLP_NRET_N | Q6SS_ETB_SLP_NRET_N |
 		 Q6SS_L2DATA_STBY_N);
-	writel_relaxed(val, drv->reg_base + QDSP6SS_PWR_CTL);
+	writel_relaxed(Q6SS_CLAMP_IO, drv->reg_base + QDSP6SS_PWR_CTL);
 
 	/* Assert Q6 resets */
 	val = readl_relaxed(drv->reg_base + QDSP6SS_RESET);
-	val |= (Q6SS_CORE_ARES | Q6SS_BUS_ARES_ENA);
+	val = (Q6SS_CORE_ARES | Q6SS_BUS_ARES_ENA);
 	writel_relaxed(val, drv->reg_base + QDSP6SS_RESET);
 
-	/* Kill power at block headswitch */
+	/* Kill power at block headswitch (affects LPASS only) */
 	val = readl_relaxed(drv->reg_base + QDSP6SS_PWR_CTL);
 	val &= ~QDSS_BHS_ON;
 	writel_relaxed(val, drv->reg_base + QDSP6SS_PWR_CTL);
@@ -182,7 +145,7 @@ EXPORT_SYMBOL(pil_q6v5_shutdown);
 
 int pil_q6v5_reset(struct pil_desc *pil)
 {
-	struct q6v5_data *drv = container_of(pil, struct q6v5_data, desc);
+	struct q6v5_data *drv = dev_get_drvdata(pil->dev);
 	u32 val;
 
 	/* Assert resets, stop core */
@@ -190,26 +153,16 @@ int pil_q6v5_reset(struct pil_desc *pil)
 	val |= (Q6SS_CORE_ARES | Q6SS_BUS_ARES_ENA | Q6SS_STOP_CORE);
 	writel_relaxed(val, drv->reg_base + QDSP6SS_RESET);
 
-	/* Enable power block headswitch, and wait for it to stabilize */
+	/* Enable power block headswitch (only affects LPASS) */
 	val = readl_relaxed(drv->reg_base + QDSP6SS_PWR_CTL);
-	val |= QDSS_BHS_ON | QDSS_LDO_BYP;
+	val |= QDSS_BHS_ON;
 	writel_relaxed(val, drv->reg_base + QDSP6SS_PWR_CTL);
-	mb();
-	udelay(1);
 
-	/*
-	 * Turn on memories. L2 banks should be done individually
-	 * to minimize inrush current.
-	 */
+	/* Turn on memories */
 	val = readl_relaxed(drv->reg_base + QDSP6SS_PWR_CTL);
-	val |= Q6SS_SLP_RET_N | Q6SS_L2TAG_SLP_NRET_N |
-	       Q6SS_ETB_SLP_NRET_N | Q6SS_L2DATA_STBY_N;
-	writel_relaxed(val, drv->reg_base + QDSP6SS_PWR_CTL);
-	val |= Q6SS_L2DATA_SLP_NRET_N_2;
-	writel_relaxed(val, drv->reg_base + QDSP6SS_PWR_CTL);
-	val |= Q6SS_L2DATA_SLP_NRET_N_1;
-	writel_relaxed(val, drv->reg_base + QDSP6SS_PWR_CTL);
-	val |= Q6SS_L2DATA_SLP_NRET_N_0;
+	val |= Q6SS_L2DATA_SLP_NRET_N | Q6SS_SLP_RET_N |
+	       Q6SS_L2TAG_SLP_NRET_N | Q6SS_ETB_SLP_NRET_N |
+	       Q6SS_L2DATA_STBY_N;
 	writel_relaxed(val, drv->reg_base + QDSP6SS_PWR_CTL);
 
 	/* Remove IO clamp */
@@ -220,6 +173,11 @@ int pil_q6v5_reset(struct pil_desc *pil)
 	val = readl_relaxed(drv->reg_base + QDSP6SS_RESET);
 	val &= ~Q6SS_CORE_ARES;
 	writel_relaxed(val, drv->reg_base + QDSP6SS_RESET);
+
+	/* Disable clock gating for core and rclk */
+	val = readl_relaxed(drv->reg_base + QDSP6SS_CGC_OVERRIDE);
+	val |= Q6SS_CORE_RCLK_EN | Q6SS_CORE_CLK_EN;
+	writel_relaxed(val, drv->reg_base + QDSP6SS_CGC_OVERRIDE);
 
 	/* Turn on core clock */
 	val = readl_relaxed(drv->reg_base + QDSP6SS_GFMUX_CTL);
@@ -235,7 +193,7 @@ int pil_q6v5_reset(struct pil_desc *pil)
 }
 EXPORT_SYMBOL(pil_q6v5_reset);
 
-struct q6v5_data __devinit *pil_q6v5_init(struct platform_device *pdev)
+struct pil_desc __devinit *pil_q6v5_init(struct platform_device *pdev)
 {
 	struct q6v5_data *drv;
 	struct resource *res;
@@ -245,19 +203,25 @@ struct q6v5_data __devinit *pil_q6v5_init(struct platform_device *pdev)
 	drv = devm_kzalloc(&pdev->dev, sizeof(*drv), GFP_KERNEL);
 	if (!drv)
 		return ERR_PTR(-ENOMEM);
+	platform_set_drvdata(pdev, drv);
 
-	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "qdsp6_base");
-	drv->reg_base = devm_request_and_ioremap(&pdev->dev, res);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	if (!res)
+		return ERR_PTR(-EINVAL);
+	drv->reg_base = devm_ioremap(&pdev->dev, res->start,
+				     resource_size(res));
 	if (!drv->reg_base)
 		return ERR_PTR(-ENOMEM);
-
-	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "halt_base");
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 1);
 	drv->axi_halt_base = devm_ioremap(&pdev->dev, res->start,
 					  resource_size(res));
 	if (!drv->axi_halt_base)
 		return ERR_PTR(-ENOMEM);
 
-	desc = &drv->desc;
+	desc = devm_kzalloc(&pdev->dev, sizeof(*desc), GFP_KERNEL);
+	if (!desc)
+		return ERR_PTR(-ENOMEM);
+
 	ret = of_property_read_string(pdev->dev.of_node, "qcom,firmware-name",
 				      &desc->name);
 	if (ret)
@@ -267,37 +231,8 @@ struct q6v5_data __devinit *pil_q6v5_init(struct platform_device *pdev)
 	if (IS_ERR(drv->xo))
 		return ERR_CAST(drv->xo);
 
-	drv->vreg_cx = devm_regulator_get(&pdev->dev, "vdd_cx");
-	if (IS_ERR(drv->vreg_cx))
-		return ERR_CAST(drv->vreg_cx);
-
-	drv->vreg_pll = devm_regulator_get(&pdev->dev, "vdd_pll");
-	if (!IS_ERR(drv->vreg_pll)) {
-		int voltage;
-		ret = of_property_read_u32(pdev->dev.of_node, "qcom,vdd_pll",
-					   &voltage);
-		if (ret) {
-			dev_err(&pdev->dev, "Failed to find vdd_pll voltage.\n");
-			return ERR_PTR(ret);
-		}
-
-		ret = regulator_set_voltage(drv->vreg_pll, voltage, voltage);
-		if (ret) {
-			dev_err(&pdev->dev, "Failed to request vdd_pll voltage.\n");
-			return ERR_PTR(ret);
-		}
-
-		ret = regulator_set_optimum_mode(drv->vreg_pll, 10000);
-		if (ret < 0) {
-			dev_err(&pdev->dev, "Failed to set vdd_pll mode.\n");
-			return ERR_PTR(ret);
-		}
-	} else {
-		 drv->vreg_pll = NULL;
-	}
-
 	desc->dev = &pdev->dev;
 
-	return drv;
+	return desc;
 }
 EXPORT_SYMBOL(pil_q6v5_init);

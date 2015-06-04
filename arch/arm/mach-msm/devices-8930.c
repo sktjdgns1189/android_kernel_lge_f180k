@@ -31,26 +31,15 @@
 #include "rpm_stats.h"
 #include "rpm_rbcpr_stats.h"
 #include "footswitch.h"
+#include "acpuclock-krait.h"
 #include "pm.h"
 
 #ifdef CONFIG_MSM_MPM
 #include <mach/mpm.h>
 #endif
+#define MSM8930_RPM_MASTER_STATS_BASE	0x10B100
 #define MSM8930_PC_CNTR_PHYS	(MSM8930_IMEM_PHYS + 0x664)
 #define MSM8930_PC_CNTR_SIZE		0x40
-#define MSM8930_RPM_MASTER_STATS_BASE	0x10B100
-
-static struct resource msm8930_resources_pccntr[] = {
-	{
-		.start	= MSM8930_PC_CNTR_PHYS,
-		.end	= MSM8930_PC_CNTR_PHYS + MSM8930_PC_CNTR_SIZE,
-		.flags	= IORESOURCE_MEM,
-	},
-};
-
-static struct msm_pm_init_data_type msm_pm_data = {
-	.retention_calls_tz = true,
-};
 
 static struct msm_pm_sleep_status_data msm_pm_slp_sts_data = {
 	.base_addr = MSM_ACC0_BASE + 0x08,
@@ -66,14 +55,19 @@ struct platform_device msm8930_cpu_slp_status = {
 	},
 };
 
-struct platform_device msm8930_pm_8x60 = {
-	.name		= "pm-8x60",
+static struct resource msm8930_resources_pccntr[] = {
+	{
+		.start	= MSM8930_PC_CNTR_PHYS,
+		.end	= MSM8930_PC_CNTR_PHYS + MSM8930_PC_CNTR_SIZE,
+		.flags	= IORESOURCE_MEM,
+	},
+};
+
+struct platform_device msm8930_pc_cntr = {
+	.name		= "pc-cntr",
 	.id		= -1,
 	.num_resources	= ARRAY_SIZE(msm8930_resources_pccntr),
 	.resource	= msm8930_resources_pccntr,
-	.dev = {
-		.platform_data = &msm_pm_data,
-	},
 };
 
 struct msm_rpm_platform_data msm8930_rpm_data __initdata = {
@@ -568,28 +562,16 @@ struct platform_device msm8930_rpm_log_device = {
 };
 
 static struct msm_rpmstats_platform_data msm_rpm_stat_pdata = {
-	.version = 1,
+	.phys_addr_base = 0x0010DD04,
+	.phys_size = SZ_256,
 };
-
-static struct resource msm_rpm_stat_resource[] = {
-	{
-		.start	= 0x0010D204,
-		.end	= 0x0010D204 + SZ_8K,
-		.flags	= IORESOURCE_MEM,
-		.name	= "phys_addr_base"
-
-	},
-};
-
 
 struct platform_device msm8930_rpm_stat_device = {
 	.name = "msm_rpm_stat",
 	.id = -1,
-	.resource = msm_rpm_stat_resource,
-	.num_resources	= ARRAY_SIZE(msm_rpm_stat_resource),
-	.dev	= {
+	.dev = {
 		.platform_data = &msm_rpm_stat_pdata,
-	}
+	},
 };
 
 static struct resource resources_rpm_master_stats[] = {
@@ -609,12 +591,11 @@ static char *master_names[] = {
 
 static struct msm_rpm_master_stats_platform_data msm_rpm_master_stat_pdata = {
 	.masters = master_names,
-	.num_masters = ARRAY_SIZE(master_names),
-	.master_offset = 32,
+	.nomasters = ARRAY_SIZE(master_names),
 };
 
 struct platform_device msm8930_rpm_master_stat_device = {
-	.name = "msm_rpm_master_stats",
+	.name = "msm_rpm_master_stat",
 	.id = -1,
 	.num_resources	= ARRAY_SIZE(resources_rpm_master_stats),
 	.resource	= resources_rpm_master_stats,
@@ -674,9 +655,16 @@ struct platform_device msm8627_device_acpuclk = {
 	.id		= -1,
 };
 
+static struct acpuclk_platform_data acpuclk_8930_pdata = {
+	.uses_pm8917 = false,
+};
+
 struct platform_device msm8930_device_acpuclk = {
 	.name		= "acpuclk-8930",
 	.id		= -1,
+	.dev = {
+		.platform_data = &acpuclk_8930_pdata,
+	},
 };
 
 struct platform_device msm8930aa_device_acpuclk = {
@@ -684,9 +672,16 @@ struct platform_device msm8930aa_device_acpuclk = {
 	.id		= -1,
 };
 
+static struct acpuclk_platform_data acpuclk_8930ab_pdata = {
+	.uses_pm8917 = false,
+};
+
 struct platform_device msm8930ab_device_acpuclk = {
 	.name		= "acpuclk-8930ab",
 	.id		= -1,
+	.dev = {
+		.platform_data = &acpuclk_8930ab_pdata,
+	},
 };
 
 static struct fs_driver_data gfx3d_fs_data = {
@@ -960,17 +955,20 @@ static struct msm_bus_vectors vidc_vdec_720p_vectors[] = {
 		.ib  = 7000000,
 	},
 };
+/*This value is modified because internally we use
+ * lower value. But OEM has increased it. This is correct value
+ * for oem*/
 static struct msm_bus_vectors vidc_venc_1080p_vectors[] = {
 	{
 		.src = MSM_BUS_MASTER_HD_CODEC_PORT0,
 		.dst = MSM_BUS_SLAVE_EBI_CH0,
-		.ab  = 372244480,
+		.ab  = 400000000,
 		.ib  = 2560000000U,
 	},
 	{
 		.src = MSM_BUS_MASTER_HD_CODEC_PORT1,
 		.dst = MSM_BUS_SLAVE_EBI_CH0,
-		.ab  = 501219328,
+		.ab  = 550000000,
 		.ib  = 2560000000U,
 	},
 	{
@@ -1143,6 +1141,7 @@ struct msm_vidc_platform_data apq8930_vidc_platform_data = {
 	.disable_fullhd = 0,
 	.cont_mode_dpb_count = 18,
 	.fw_addr = 0x9fe00000,
+	.enable_sec_metadata = 0,
 };
 
 struct platform_device apq8930_msm_device_vidc = {

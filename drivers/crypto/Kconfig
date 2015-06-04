@@ -306,7 +306,7 @@ config CRYPTO_DEV_QCRYPTO
 config CRYPTO_DEV_QCE
 	tristate "Qualcomm Crypto Engine (QCE) module"
 	select  CRYPTO_DEV_QCE40 if ARCH_MSM8960 || ARCH_MSM9615
-	select  CRYPTO_DEV_QCE50 if ARCH_MSM8974 || ARCH_MSM9625 || ARCH_MSM8226 || ARCH_MSM8610
+	select  CRYPTO_DEV_QCE50 if ARCH_MSM8974
 	default n
 	help
           This driver supports Qualcomm Crypto Engine in MSM7x30, MSM8660
@@ -344,4 +344,15 @@ config CRYPTO_DEV_TEGRA_AES
 	  To compile this driver as a module, choose M here: the module
 	  will be called tegra-aes.
 
+#ifdef CONFIG_CRYPTO_DEV_KFIPS
+config CRYPTO_DEV_KFIPS
+	tristate "KFIPS user space crypto proxy"
+	select CRYPTO_ALGAPI
+	select CRYPTO_BLKCIPHER
+	help
+	  This option enables the 'kfips' crypto driver that performs
+	  crypto operations with the help of the 'ufips' user space
+	  program that uses a FIPS-certified cryptography library.
+
+#endif
 endif # CRYPTO_HW

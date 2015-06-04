@@ -153,7 +153,6 @@ struct branch {
 };
 
 extern struct clk_ops clk_ops_branch;
-extern struct clk_ops clk_ops_smi_2x;
 extern struct clk_ops clk_ops_reset;
 
 int branch_reset(struct branch *b, enum clk_reset_action action);
@@ -235,6 +234,7 @@ struct fixed_clk {
  * struct branch_clk - branch
  * @enabled: true if clock is on, false otherwise
  * @b: branch
+ * @parent: clock source
  * @c: clock
  *
  * An on/off switch with a rate derived from the parent.
@@ -242,6 +242,7 @@ struct fixed_clk {
 struct branch_clk {
 	bool enabled;
 	struct branch b;
+	struct clk *parent;
 	struct clk c;
 };
 

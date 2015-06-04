@@ -49,13 +49,10 @@
 #define FORMAT_MAT	0x0017
 #define FORMAT_AAC	0x0018
 #define FORMAT_DTS_LBR 0x0019
-#define FORMAT_PASS_THROUGH 0x0020
-#define FORMAT_MP2          0x0021
 
 #define ENCDEC_SBCBITRATE   0x0001
 #define ENCDEC_IMMEDIATE_DECODE 0x0002
 #define ENCDEC_CFG_BLK          0x0003
-#define DTS_ENC_SAMPLE_RATE48k	48000
 
 #define CMD_PAUSE          0x0001
 #define CMD_FLUSH          0x0002
@@ -198,11 +195,6 @@ int q6asm_open_write(struct audio_client *ac, uint32_t format);
 
 int q6asm_open_write_compressed(struct audio_client *ac, uint32_t format);
 
-int q6asm_open_transcode_loopback(struct audio_client *ac, uint32_t channels);
-
-int q6asm_enc_cfg_blk_dts(struct audio_client *ac,
-				uint32_t sample_rate, uint32_t channels);
-
 int q6asm_open_read_write(struct audio_client *ac,
 			uint32_t rd_format,
 			uint32_t wr_format);
@@ -298,8 +290,7 @@ int q6asm_media_format_block_pcm(struct audio_client *ac,
 			uint32_t rate, uint32_t channels);
 
 int q6asm_media_format_block_multi_ch_pcm(struct audio_client *ac,
-				uint32_t rate, uint32_t channels,
-				char *channel_map);
+				uint32_t rate, uint32_t channels);
 
 int q6asm_media_format_block_aac(struct audio_client *ac,
 			struct asm_aac_cfg *cfg);

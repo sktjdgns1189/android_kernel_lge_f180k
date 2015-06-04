@@ -26,28 +26,6 @@ EXPORT_SYMBOL_GPL(power_supply_class);
 static struct device_type power_supply_dev_type;
 
 /**
- * power_supply_set_voltage_limit - set current limit
- * @psy:	the power supply to control
- * @limit:	current limit in uV from the power supply.
- *		0 will disable the power supply.
- *
- * This function will set a maximum supply current from a source
- * and it will disable the charger when limit is 0.
- */
-int power_supply_set_voltage_limit(struct power_supply *psy, int limit)
-{
-	const union power_supply_propval ret = {limit,};
-
-	if (psy->set_property)
-		return psy->set_property(psy, POWER_SUPPLY_PROP_VOLTAGE_MAX,
-								&ret);
-
-	return -ENXIO;
-}
-EXPORT_SYMBOL(power_supply_set_voltage_limit);
-
-
-/**
  * power_supply_set_current_limit - set current limit
  * @psy:	the power supply to control
  * @limit:	current limit in uA from the power supply.
@@ -68,29 +46,7 @@ int power_supply_set_current_limit(struct power_supply *psy, int limit)
 }
 EXPORT_SYMBOL_GPL(power_supply_set_current_limit);
 
-/**
- * power_supply_set_charging_enabled - enable or disable charging
- * @psy:	the power supply to control
- * @enable:	sets enable property of power supply
- */
-int power_supply_set_charging_enabled(struct power_supply *psy, bool enable)
-{
-	const union power_supply_propval ret = {enable,};
-
-	if (psy->set_property)
-		return psy->set_property(psy,
-				POWER_SUPPLY_PROP_CHARGING_ENABLED,
-				&ret);
-
-	return -ENXIO;
-}
-EXPORT_SYMBOL_GPL(power_supply_set_charging_enabled);
-
-/**
- * power_supply_set_present - set present state of the power supply
- * @psy:	the power supply to control
- * @enable:	sets present property of power supply
- */
+#ifdef CONFIG_MACH_APQ8064_ALTEV
 int power_supply_set_present(struct power_supply *psy, bool enable)
 {
 	const union power_supply_propval ret = {enable,};
@@ -102,6 +58,7 @@ int power_supply_set_present(struct power_supply *psy, bool enable)
 	return -ENXIO;
 }
 EXPORT_SYMBOL_GPL(power_supply_set_present);
+#endif
 
 /**
  * power_supply_set_online - set online state of the power supply
@@ -119,23 +76,6 @@ int power_supply_set_online(struct power_supply *psy, bool enable)
 	return -ENXIO;
 }
 EXPORT_SYMBOL_GPL(power_supply_set_online);
-
-
-/** power_supply_set_health_state - set health state of the power supply
- * @psy:       the power supply to control
- * @health:    sets health property of power supply
- */
-int power_supply_set_health_state(struct power_supply *psy, int health)
-{
-	const union power_supply_propval ret = {health,};
-
-	if (psy->set_property)
-		return psy->set_property(psy, POWER_SUPPLY_PROP_HEALTH,
-		&ret);
-	return -ENXIO;
-}
-EXPORT_SYMBOL(power_supply_set_health_state);
-
 
 /**
  * power_supply_set_scope - set scope of the power supply
@@ -219,7 +159,9 @@ static void power_supply_changed_work(struct work_struct *work)
 		class_for_each_device(power_supply_class, NULL, psy,
 				      __power_supply_changed_work);
 
+#ifndef CONFIG_MACH_APQ8064_ALTEV
 		power_supply_update_leds(psy);
+#endif
 
 		kobject_uevent(&psy->dev->kobj, KOBJ_CHANGE);
 		spin_lock_irqsave(&psy->changed_lock, flags);

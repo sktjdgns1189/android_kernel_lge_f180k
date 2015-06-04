@@ -311,7 +311,3 @@ int msm_bus_board_rpm_get_il_ids(uint16_t id[])
 {
 	return -ENXIO;
 }
-
-void msm_bus_board_init(struct msm_bus_fabric_registration *pdata)
-{
-}

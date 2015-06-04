@@ -133,6 +133,7 @@ struct ehci_hcd {			/* one per controller */
 	unsigned		random_frame;
 	unsigned long		next_statechange;
 	ktime_t			last_periodic_enable;
+	ktime_t			last_susp_resume;
 	u32			command;
 
 	unsigned		log2_irq_thresh;
@@ -154,7 +155,6 @@ struct ehci_hcd {			/* one per controller */
 	unsigned		susp_sof_bug:1; /*Chip Idea HC*/
 	unsigned		resume_sof_bug:1;/*Chip Idea HC*/
 	unsigned		reset_sof_bug:1; /*Chip Idea HC*/
-	bool			disable_cerr;
 	u32			reset_delay;
 
 	/* required for usb32 quirk */
@@ -168,7 +168,6 @@ struct ehci_hcd {			/* one per controller */
 	unsigned		has_hostpc:1;
 	unsigned		has_lpm:1;  /* support link power management */
 	unsigned		has_ppcd:1; /* support per-port change bits */
-	unsigned		pool_64_bit_align:1; /* for 64 bit alignment */
 	u8			sbrn;		/* packed release number */
 
 	/* irq statistics */
@@ -754,6 +753,23 @@ static inline u32 hc32_to_cpup (const struct ehci_hcd *ehci, const __hc32 *x)
 	return le32_to_cpup(x);
 }
 
+#endif
+
+/*
+ * Writing to dma coherent memory on ARM may be delayed via L2
+ * writing buffer, so introduce the helper which can flush L2 writing
+ * buffer into memory immediately, especially used to flush ehci
+ * descriptor to memory.
+ * */
+#ifdef	CONFIG_ARM_DMA_MEM_BUFFERABLE
+static inline void ehci_sync_mem(void)
+{
+	mb();
+}
+#else
+static inline void ehci_sync_mem(void)
+{
+}
 #endif
 
 /*-------------------------------------------------------------------------*/

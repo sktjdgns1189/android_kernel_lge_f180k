@@ -1,4 +1,4 @@
-/* Copyright (c) 2010-2013, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2010-2012, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -10,7 +10,6 @@
  * GNU General Public License for more details.
  *
  */
-#include <linux/slab.h>
 #include <linux/fs.h>
 #include <linux/module.h>
 #include <linux/miscdevice.h>
@@ -19,16 +18,10 @@
 #include <linux/msm_ion.h>
 #include <linux/mm.h>
 #include <mach/qdsp6v2/audio_acdb.h>
+#include <linux/slab.h>
 
-
-#define MAX_NETWORKS			15
-#define MAX_IOCTL_DATA			(MAX_NETWORKS * 2)
-#define MAX_COL_SIZE			324
-
-#define ACDB_BLOCK_SIZE			4096
-#define NUM_VOCPROC_BLOCKS		(6 * MAX_NETWORKS)
-#define ACDB_TOTAL_VOICE_ALLOCATION	(ACDB_BLOCK_SIZE * NUM_VOCPROC_BLOCKS)
-
+#define MAX_NETWORKS		15
+#define MAX_HW_DELAY_ENTRIES	25
 
 struct sidetone_atomic_cal {
 	atomic_t	enable;
@@ -77,6 +70,9 @@ struct acdb_data {
 	atomic64_t			paddr;
 	atomic64_t			kvaddr;
 	atomic64_t			mem_len;
+	/* Av sync delay info */
+	struct hw_delay hw_delay_rx;
+	struct hw_delay hw_delay_tx;
 };
 
 static struct acdb_data		acdb_data;
@@ -132,15 +128,6 @@ void store_asm_topology(uint32_t topology)
 	atomic_set(&acdb_data.asm_topology, topology);
 }
 
-void get_voice_cal_allocation(struct acdb_cal_block *cal_block)
-{
-	cal_block->cal_kvaddr =
-		atomic_read(&acdb_data.vocproc_cal[0].cal_kvaddr);
-	cal_block->cal_paddr =
-		atomic_read(&acdb_data.vocproc_cal[0].cal_paddr);
-	cal_block->cal_size = ACDB_TOTAL_VOICE_ALLOCATION;
-}
-
 void get_all_voice_cal(struct acdb_cal_block *cal_block)
 {
 	cal_block->cal_kvaddr =
@@ -192,6 +179,124 @@ void get_all_vocvol_cal(struct acdb_cal_block *cal_block)
 		atomic_read(&acdb_data.vocvol_cal[0].cal_paddr);
 	cal_block->cal_size =
 		atomic_read(&acdb_data.vocvol_total_cal_size);
+}
+
+int get_hw_delay(int32_t path, struct hw_delay_entry *entry)
+{
+	int i, result = 0;
+	struct hw_delay *delay = NULL;
+	struct hw_delay_entry *info = NULL;
+	pr_debug("%s,\n", __func__);
+
+	if (entry == NULL) {
+		pr_err("ACDB=> NULL pointer sent to %s\n", __func__);
+		result = -EINVAL;
+		goto ret;
+	}
+	if ((path >= MAX_AUDPROC_TYPES) || (path < 0)) {
+		pr_err("ACDB=> Bad path sent to %s, path: %d\n",
+		       __func__, path);
+		result = -EINVAL;
+		goto ret;
+	}
+	mutex_lock(&acdb_data.acdb_mutex);
+	if (path == RX_CAL)
+		delay = &acdb_data.hw_delay_rx;
+	else if (path == TX_CAL)
+		delay = &acdb_data.hw_delay_tx;
+	else
+		pr_err("ACDB=> %s Invalid path: %d\n",__func__,path);
+
+	if ((delay == NULL) || ((delay != NULL) && delay->num_entries == 0)) {
+		pr_err("ACDB=> %s Invalid delay/ delay entries\n", __func__);
+		result = -EINVAL;
+		goto done;
+	}
+
+	info = (struct hw_delay_entry *)(delay->delay_info);
+	if (info == NULL) {
+		pr_err("ACDB=> %s Delay entries info is NULL\n", __func__);
+		result = -EINVAL;
+		goto done;
+	}
+	for (i = 0; i < delay->num_entries; i++) {
+		if (info[i].sample_rate == entry->sample_rate) {
+			entry->delay_usec = info[i].delay_usec;
+			break;
+		}
+	}
+	if (i == delay->num_entries) {
+		pr_err("ACDB=> %s: Unable to find delay for sample rate %d\n",
+		       __func__, entry->sample_rate);
+		result = -EINVAL;
+	}
+
+done:
+	mutex_unlock(&acdb_data.acdb_mutex);
+ret:
+	pr_err("ACDB=> %s: Path = %d samplerate = %u usec = %u status %d\n",
+		 __func__, path, entry->sample_rate, entry->delay_usec, result);
+	return result;
+}
+
+int store_hw_delay(int32_t path, void *arg)
+{
+	int result = 0;
+	struct hw_delay delay;
+	struct hw_delay *delay_dest = NULL;
+	pr_debug("%s,\n", __func__);
+
+	if ((path >= MAX_AUDPROC_TYPES) || (path < 0) || (arg == NULL)) {
+		pr_err("ACDB=> Bad path/ pointer sent to %s, path: %d\n",
+		      __func__, path);
+		result = -EINVAL;
+		goto done;
+	}
+	result = copy_from_user((void *)&delay, (void *)arg,
+				sizeof(struct hw_delay));
+	if (result) {
+		pr_err("ACDB=> %s failed to copy hw delay: result=%d path=%d\n",
+		       __func__, result, path);
+		result = -EFAULT;
+		goto done;
+	}
+	if ((delay.num_entries <= 0) ||
+		(delay.num_entries > MAX_HW_DELAY_ENTRIES)) {
+		pr_debug("ACDB=> %s incorrect no of hw delay entries: %d\n",
+		       __func__, delay.num_entries);
+		result = -EINVAL;
+		goto done;
+	}
+	if ((path >= MAX_AUDPROC_TYPES) || (path < 0)) {
+		pr_err("ACDB=> Bad path sent to %s, path: %d\n",
+		__func__, path);
+		result = -EINVAL;
+		goto done;
+	}
+
+	pr_debug("ACDB=> %s : Path = %d num_entries = %d\n",
+		 __func__, path, delay.num_entries);
+
+	mutex_lock(&acdb_data.acdb_mutex);
+	if (path == RX_CAL)
+		delay_dest = &acdb_data.hw_delay_rx;
+	else if (path == TX_CAL)
+		delay_dest = &acdb_data.hw_delay_tx;
+
+	delay_dest->num_entries = delay.num_entries;
+
+	result = copy_from_user(delay_dest->delay_info,
+				delay.delay_info,
+				(sizeof(struct hw_delay_entry)*
+				delay.num_entries));
+	if (result) {
+		pr_err("ACDB=> %s failed to copy hw delay info res=%d path=%d",
+		       __func__, result, path);
+		result = -EFAULT;
+	}
+	mutex_unlock(&acdb_data.acdb_mutex);
+done:
+	return result;
 }
 
 void get_anc_cal(struct acdb_cal_block *cal_block)
@@ -434,14 +539,15 @@ done:
 	return;
 }
 
+
 void store_vocproc_cal(int32_t len, struct cal_block *cal_blocks)
 {
 	int i;
 	pr_debug("%s\n", __func__);
 
 	if (len > MAX_NETWORKS) {
-		pr_err("%s: Calibration sent for %d networks, only %d are supported!\n",
-			__func__, len, MAX_NETWORKS);
+		pr_err("%s: Calibration sent for %d networks, only %d are "
+			"supported!\n", __func__, len, MAX_NETWORKS);
 		goto done;
 	}
 
@@ -492,8 +598,8 @@ void store_vocstrm_cal(int32_t len, struct cal_block *cal_blocks)
 	pr_debug("%s\n", __func__);
 
 	if (len > MAX_NETWORKS) {
-		pr_err("%s: Calibration sent for %d networks, only %d are supported!\n",
-			__func__, len, MAX_NETWORKS);
+		pr_err("%s: Calibration sent for %d networks, only %d are "
+			"supported!\n", __func__, len, MAX_NETWORKS);
 		goto done;
 	}
 
@@ -544,8 +650,8 @@ void store_vocvol_cal(int32_t len, struct cal_block *cal_blocks)
 	pr_debug("%s\n", __func__);
 
 	if (len > MAX_NETWORKS) {
-		pr_err("%s: Calibration sent for %d networks, only %d are supported!\n",
-			__func__, len, MAX_NETWORKS);
+		pr_err("%s: Calibration sent for %d networks, only %d are "
+			"supported!\n", __func__, len, MAX_NETWORKS);
 		goto done;
 	}
 
@@ -620,22 +726,57 @@ static int acdb_open(struct inode *inode, struct file *f)
 	pr_debug("%s\n", __func__);
 
 	if (atomic64_read(&acdb_data.mem_len)) {
-		pr_debug("%s: ACDB opened but memory allocated, using existing allocation!\n",
+		pr_debug("%s: ACDB opened but memory allocated, "
+			"using existing allocation!\n",
 			__func__);
 	}
 
 	atomic_inc(&usage_count);
+
 	return result;
+
+}
+
+static void allocate_hw_delay_entries(void)
+{
+
+	/* Allocate memory for hw delay entries */
+
+	acdb_data.hw_delay_rx.num_entries = 0;
+	acdb_data.hw_delay_tx.num_entries = 0;
+	acdb_data.hw_delay_rx.delay_info =
+				kmalloc(sizeof(struct hw_delay_entry)*
+					MAX_HW_DELAY_ENTRIES,
+					GFP_KERNEL);
+	if (acdb_data.hw_delay_rx.delay_info == NULL) {
+		pr_err("%s : Failed to allocate av sync delay entries rx\n",
+			__func__);
+	}
+	acdb_data.hw_delay_tx.delay_info =
+				kmalloc(sizeof(struct hw_delay_entry)*
+					MAX_HW_DELAY_ENTRIES,
+					GFP_KERNEL);
+	if (acdb_data.hw_delay_tx.delay_info == NULL) {
+		pr_err("%s : Failed to allocate av sync delay entries tx\n",
+			__func__);
+	}
+
+	return;
 }
 
 static int deregister_memory(void)
 {
+	mutex_lock(&acdb_data.acdb_mutex);
+	kfree(acdb_data.hw_delay_tx.delay_info);
+	kfree(acdb_data.hw_delay_rx.delay_info);
+	mutex_unlock(&acdb_data.acdb_mutex);
+
 	if (atomic64_read(&acdb_data.mem_len)) {
 		mutex_lock(&acdb_data.acdb_mutex);
-		atomic64_set(&acdb_data.mem_len, 0);
 		atomic_set(&acdb_data.vocstrm_total_cal_size, 0);
 		atomic_set(&acdb_data.vocproc_total_cal_size, 0);
 		atomic_set(&acdb_data.vocvol_total_cal_size, 0);
+		atomic64_set(&acdb_data.mem_len, 0);
 		ion_unmap_kernel(acdb_data.ion_client, acdb_data.ion_handle);
 		ion_free(acdb_data.ion_client, acdb_data.ion_handle);
 		ion_client_destroy(acdb_data.ion_client);
@@ -653,7 +794,7 @@ static int register_memory(void)
 	unsigned long		mem_len;
 
 	mutex_lock(&acdb_data.acdb_mutex);
-
+	allocate_hw_delay_entries();
 	acdb_data.ion_client =
 		msm_ion_client_create(UINT_MAX, "audio_acdb_client");
 	if (IS_ERR_OR_NULL(acdb_data.ion_client)) {
@@ -690,7 +831,8 @@ static int register_memory(void)
 	atomic64_set(&acdb_data.mem_len, mem_len);
 	mutex_unlock(&acdb_data.acdb_mutex);
 
-	pr_debug("%s done! paddr = 0x%lx, kvaddr = 0x%lx, len = x%lx\n",
+	pr_debug("%s: done! paddr = 0x%lx, "
+		"kvaddr = 0x%lx, len = x%lx\n",
 		 __func__,
 		(long)atomic64_read(&acdb_data.paddr),
 		(long)atomic64_read(&acdb_data.kvaddr),
@@ -706,7 +848,6 @@ err:
 	mutex_unlock(&acdb_data.acdb_mutex);
 	return result;
 }
-
 static long acdb_ioctl(struct file *f,
 		unsigned int cmd, unsigned long arg)
 {
@@ -714,7 +855,7 @@ static long acdb_ioctl(struct file *f,
 	int32_t			size;
 	int32_t			map_fd;
 	uint32_t		topology;
-	uint32_t		data[MAX_IOCTL_DATA];
+	struct cal_block	data[MAX_NETWORKS];
 	pr_debug("%s\n", __func__);
 
 	switch (cmd) {
@@ -778,6 +919,12 @@ static long acdb_ioctl(struct file *f,
 		}
 		store_asm_topology(topology);
 		goto done;
+	case AUDIO_SET_HW_DELAY_RX:
+		result = store_hw_delay(RX_CAL, (void *)arg);
+		goto done;
+	case AUDIO_SET_HW_DELAY_TX:
+		result = store_hw_delay(TX_CAL, (void *)arg);
+		goto done;
 	}
 
 	if (copy_from_user(&size, (void *) arg, sizeof(size))) {
@@ -809,72 +956,69 @@ static long acdb_ioctl(struct file *f,
 	switch (cmd) {
 	case AUDIO_SET_AUDPROC_TX_CAL:
 		if (size > sizeof(struct cal_block))
-			pr_err("%s: More Audproc Cal then expected, size received: %d\n",
-				__func__, size);
-		store_audproc_cal(TX_CAL, (struct cal_block *)data);
+			pr_err("%s: More Audproc Cal then expected, "
+				"size received: %d\n", __func__, size);
+		store_audproc_cal(TX_CAL, data);
 		break;
 	case AUDIO_SET_AUDPROC_RX_CAL:
 		if (size > sizeof(struct cal_block))
-			pr_err("%s: More Audproc Cal then expected, size received: %d\n",
-				__func__, size);
-		store_audproc_cal(RX_CAL, (struct cal_block *)data);
+			pr_err("%s: More Audproc Cal then expected, "
+				"size received: %d\n", __func__, size);
+		store_audproc_cal(RX_CAL, data);
 		break;
 	case AUDIO_SET_AUDPROC_TX_STREAM_CAL:
 		if (size > sizeof(struct cal_block))
-			pr_err("%s: More Audproc Cal then expected, size received: %d\n",
-				__func__, size);
-		store_audstrm_cal(TX_CAL, (struct cal_block *)data);
+			pr_err("%s: More Audproc Cal then expected, "
+				"size received: %d\n", __func__, size);
+		store_audstrm_cal(TX_CAL, data);
 		break;
 	case AUDIO_SET_AUDPROC_RX_STREAM_CAL:
 		if (size > sizeof(struct cal_block))
-			pr_err("%s: More Audproc Cal then expected, size received: %d\n",
-				__func__, size);
-		store_audstrm_cal(RX_CAL, (struct cal_block *)data);
+			pr_err("%s: More Audproc Cal then expected, "
+				"size received: %d\n", __func__, size);
+		store_audstrm_cal(RX_CAL, data);
 		break;
 	case AUDIO_SET_AUDPROC_TX_VOL_CAL:
 		if (size > sizeof(struct cal_block))
-			pr_err("%s: More Audproc Cal then expected, size received: %d\n",
-				__func__, size);
-		store_audvol_cal(TX_CAL, (struct cal_block *)data);
+			pr_err("%s: More Audproc Cal then expected, "
+				"size received: %d\n", __func__, size);
+		store_audvol_cal(TX_CAL, data);
 		break;
 	case AUDIO_SET_AUDPROC_RX_VOL_CAL:
 		if (size > sizeof(struct cal_block))
-			pr_err("%s: More Audproc Cal then expected, size received: %d\n",
-				__func__, size);
-		store_audvol_cal(RX_CAL, (struct cal_block *)data);
+			pr_err("%s: More Audproc Cal then expected, "
+				"size received: %d\n", __func__, size);
+		store_audvol_cal(RX_CAL, data);
 		break;
 	case AUDIO_SET_AFE_TX_CAL:
 		if (size > sizeof(struct cal_block))
-			pr_err("%s: More AFE Cal then expected, size received: %d\n",
-				__func__, size);
-		store_afe_cal(TX_CAL, (struct cal_block *)data);
+			pr_err("%s: More AFE Cal then expected, "
+				"size received: %d\n", __func__, size);
+		store_afe_cal(TX_CAL, data);
 		break;
 	case AUDIO_SET_AFE_RX_CAL:
 		if (size > sizeof(struct cal_block))
-			pr_err("%s: More AFE Cal then expected, size received: %d\n",
-				__func__, size);
-		store_afe_cal(RX_CAL, (struct cal_block *)data);
+			pr_err("%s: More AFE Cal then expected, "
+				"size received: %d\n", __func__, size);
+		store_afe_cal(RX_CAL, data);
 		break;
 	case AUDIO_SET_VOCPROC_CAL:
-		store_vocproc_cal(size / sizeof(struct cal_block),
-						(struct cal_block *)data);
+		store_vocproc_cal(size / sizeof(struct cal_block), data);
 		break;
 	case AUDIO_SET_VOCPROC_STREAM_CAL:
-		store_vocstrm_cal(size / sizeof(struct cal_block),
-						(struct cal_block *)data);
+		store_vocstrm_cal(size / sizeof(struct cal_block), data);
 		break;
 	case AUDIO_SET_VOCPROC_VOL_CAL:
-		store_vocvol_cal(size / sizeof(struct cal_block),
-						(struct cal_block *)data);
+		store_vocvol_cal(size / sizeof(struct cal_block), data);
 		break;
 	case AUDIO_SET_SIDETONE_CAL:
 		if (size > sizeof(struct sidetone_cal))
-			pr_err("%s: More sidetone cal then expected, size received: %d\n",
-			       __func__, size);
+			pr_err("%s: More sidetone cal then expected, "
+				"size received: %d\n", __func__, size);
 		store_sidetone_cal((struct sidetone_cal *)data);
 		break;
 	case AUDIO_SET_ANC_CAL:
-		store_anc_cal((struct cal_block *)data);
+		store_anc_cal(data);
 		break;
 	default:
 		pr_err("ACDB=> ACDB ioctl not found!\n");
@@ -949,7 +1093,6 @@ static int __init acdb_init(void)
 	memset(&acdb_data, 0, sizeof(acdb_data));
 	mutex_init(&acdb_data.acdb_mutex);
 	atomic_set(&usage_count, 0);
-
 	return misc_register(&acdb_misc);
 }
 

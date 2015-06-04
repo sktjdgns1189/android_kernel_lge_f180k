@@ -24,7 +24,7 @@
 #include <linux/pagemap.h>
 #include <linux/sched.h>
 #include <linux/io.h>
-
+#include <linux/android_pmem.h>
 #include <linux/memory_alloc.h>
 #include <media/videobuf2-msm-mem.h>
 #include <media/msm_camera.h>
@@ -177,25 +177,43 @@ int videobuf2_pmem_contig_user_get(struct videobuf2_contig_pmem *mem,
 					struct ion_client *client,
 					int domain_num)
 {
-	int rc = 0;
-#ifdef CONFIG_MSM_MULTIMEDIA_USE_ION
 	unsigned long len;
+	int rc = 0;
+#ifndef CONFIG_MSM_MULTIMEDIA_USE_ION
+	unsigned long kvstart;
 #endif
 	unsigned long paddr = 0;
 	if (mem->phyaddr != 0)
 		return 0;
-#if defined(CONFIG_MSM_MULTIMEDIA_USE_ION)
+#ifdef CONFIG_MSM_MULTIMEDIA_USE_ION
 	mem->ion_handle = ion_import_dma_buf(client, (int)mem->vaddr);
 	if (IS_ERR_OR_NULL(mem->ion_handle)) {
 		pr_err("%s ION import failed\n", __func__);
 		return PTR_ERR(mem->ion_handle);
 	}
+/*                                                                */
+#if defined(CONFIG_LGE_GK_CAMERA)
+	//use delayed unmapping.. because iommu fault is occured...
+	rc = ion_map_iommu(client, mem->ion_handle, domain_num, 0,
+		SZ_4K, 0, (unsigned long *)&mem->phyaddr, &len, 0, ION_IOMMU_UNMAP_DELAYED);
+#else
 	rc = ion_map_iommu(client, mem->ion_handle, domain_num, 0,
 		SZ_4K, 0, (unsigned long *)&mem->phyaddr, &len, 0, 0);
+#endif
+/*                                                              */
 	if (rc < 0)
 		ion_free(client, mem->ion_handle);
+#elif CONFIG_ANDROID_PMEM
+	rc = get_pmem_file((int)mem->vaddr, (unsigned long *)&mem->phyaddr,
+					&kvstart, &len, &mem->file);
+	if (rc < 0) {
+		pr_err("%s: get_pmem_file fd %d error %d\n",
+					__func__, (int)mem->vaddr, rc);
+		return rc;
+	}
 #else
 	paddr = 0;
+	kvstart = 0;
 #endif
 	if (offset)
 		mem->offset = *offset;
@@ -210,14 +228,30 @@ int videobuf2_pmem_contig_user_get(struct videobuf2_contig_pmem *mem,
 }
 EXPORT_SYMBOL_GPL(videobuf2_pmem_contig_user_get);
 
+#if defined(CONFIG_LGE_GK_CAMERA)
+void videobuf2_pmem_contig_user_put(struct videobuf2_contig_pmem *mem,
+       struct ion_client *client, int domain_num, int is_closing)
+#else
 void videobuf2_pmem_contig_user_put(struct videobuf2_contig_pmem *mem,
 				struct ion_client *client, int domain_num)
+#endif
 {
 	if (mem->is_userptr) {
-#if defined(CONFIG_MSM_MULTIMEDIA_USE_ION)
+#ifdef CONFIG_MSM_MULTIMEDIA_USE_ION
+	if (IS_ERR_OR_NULL(mem->ion_handle)) {
+		pr_err("%s ION import failed\n", __func__);
+		return;
+	}
 		ion_unmap_iommu(client, mem->ion_handle,
 				domain_num, 0);
+/*                                                               */
+#if defined(CONFIG_LGE_GK_CAMERA)
+		if (is_closing != 1)
+#endif
 		ion_free(client, mem->ion_handle);
+/*                                                             */
+#elif CONFIG_ANDROID_PMEM
+		put_pmem_file(mem->file);
 #endif
 	}
 	mem->is_userptr = 0;
@@ -288,8 +322,8 @@ static int msm_vb2_mem_ops_mmap(void *buf_priv, struct vm_area_struct *vma)
 	vma->vm_private_data = mem;
 
 	D("mmap %p: %08lx-%08lx (%lx) pgoff %08lx\n",
-		map, vma->vm_start, vma->vm_end,
-		(long int)mem->bsize, vma->vm_pgoff);
+		vma, vma->vm_start, vma->vm_end,
+		(long int)mem->size, vma->vm_pgoff);
 	videobuf2_vm_open(vma);
 	return 0;
 error:
@@ -330,6 +364,12 @@ unsigned long videobuf2_to_pmem_contig(struct vb2_buffer *vb,
 {
 	struct videobuf2_contig_pmem *mem;
 	mem = vb2_plane_cookie(vb, plane_no);
+//                                                      
+		if(mem == NULL){
+			pr_err("%s:mem is NULL \n",__func__);
+			return 0;
+		}
+//                                                     
 	BUG_ON(!mem);
 	MAGIC_CHECK(mem->magic, MAGIC_PMEM);
 	return mem->mapped_phyaddr;

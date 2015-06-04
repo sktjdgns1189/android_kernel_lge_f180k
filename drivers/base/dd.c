@@ -24,7 +24,6 @@
 #include <linux/wait.h>
 #include <linux/async.h>
 #include <linux/pm_runtime.h>
-#include <linux/pinctrl/devinfo.h>
 
 #include "base.h"
 #include "power/power.h"
@@ -258,12 +257,6 @@ static int really_probe(struct device *dev, struct device_driver *drv)
 	WARN_ON(!list_empty(&dev->devres_head));
 
 	dev->driver = drv;
-
-	/* If using pinctrl, bind pins now before probing */
-	ret = pinctrl_bind_pins(dev);
-	if (ret)
-		goto probe_failed;
-
 	if (driver_sysfs_add(dev)) {
 		printk(KERN_ERR "%s: driver_sysfs_add(%s) failed\n",
 			__func__, dev_name(dev));
@@ -271,11 +264,23 @@ static int really_probe(struct device *dev, struct device_driver *drv)
 	}
 
 	if (dev->bus->probe) {
+#if defined(CONFIG_LGE_PROBE_TIME_PROFILING) // || defined (CONFIG_PROC_EVENTS)
+		dev_err(dev, "bus probe_log s\n");
+#endif
 		ret = dev->bus->probe(dev);
+#if defined(CONFIG_LGE_PROBE_TIME_PROFILING) // || defined (CONFIG_PROC_EVENTS)
+		dev_err(dev, "bus probe_log e\n");
+#endif
 		if (ret)
 			goto probe_failed;
 	} else if (drv->probe) {
+#if defined(CONFIG_LGE_PROBE_TIME_PROFILING) // || defined (CONFIG_PROC_EVENTS)
+		dev_err(dev, "drv probe_log s\n");
+#endif
 		ret = drv->probe(dev);
+#if defined(CONFIG_LGE_PROBE_TIME_PROFILING) // || defined (CONFIG_PROC_EVENTS)
+		dev_err(dev, "drv probe_log e\n");
+#endif
 		if (ret)
 			goto probe_failed;
 	}

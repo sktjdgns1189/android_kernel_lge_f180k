@@ -1,4 +1,4 @@
-/* Copyright (c) 2011-2013, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2011-2012, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -257,6 +257,7 @@ static struct mmc_platform_data sdc1_data = {
 	.vreg_data	= &mmc_slot_vreg_data[SDCC1],
 	.uhs_caps	= MMC_CAP_1_8V_DDR | MMC_CAP_UHS_DDR50,
 	.uhs_caps2	= MMC_CAP2_HS200_1_8V_SDR,
+	.packed_write	= MMC_CAP2_PACKED_WR | MMC_CAP2_PACKED_WR_CONTROL,
 	.mpm_sdiowakeup_int = MSM_MPM_PIN_SDC1_DAT1,
 	.msm_bus_voting_data = &sps_to_ddr_bus_voting_data,
 };
@@ -345,17 +346,13 @@ void __init apq8064_init_mmc(void)
 					ARRAY_SIZE(sdc1_sup_clk_rates_all);
 		}
 		apq8064_add_sdcc(1, apq8064_sdc1_pdata);
+		apq8064_add_uio();
 	}
 
 	if (apq8064_sdc2_pdata)
 		apq8064_add_sdcc(2, apq8064_sdc2_pdata);
 
 	if (apq8064_sdc3_pdata) {
-		if (machine_is_mpq8064_hrd() || machine_is_mpq8064_dtv()) {
-			apq8064_sdc3_pdata->uhs_caps &= ~(MMC_CAP_UHS_SDR12 |
-				MMC_CAP_UHS_SDR25 | MMC_CAP_UHS_DDR50 |
-				MMC_CAP_UHS_SDR50 | MMC_CAP_UHS_SDR104);
-		}
 		if (!machine_is_apq8064_cdp()) {
 			apq8064_sdc3_pdata->wpswitch_gpio = 0;
 			apq8064_sdc3_pdata->is_wpswitch_active_low = false;
@@ -395,14 +392,6 @@ void __init apq8064_init_mmc(void)
 			     i++)
 				apq8064_sdc3_pdata->pin_data->pad_data->\
 					drv->on[i].val = GPIO_CFG_10MA;
-		}
-		if (machine_is_mpq8064_hrd() || machine_is_mpq8064_dtv()) {
-			apq8064_sdc3_pdata->pin_data->pad_data->\
-				drv->on[0].val = GPIO_CFG_16MA;
-			apq8064_sdc3_pdata->pin_data->pad_data->\
-				drv->on[1].val = GPIO_CFG_10MA;
-			apq8064_sdc3_pdata->pin_data->pad_data->\
-				drv->on[2].val = GPIO_CFG_10MA;
 		}
 		apq8064_add_sdcc(3, apq8064_sdc3_pdata);
 	}
